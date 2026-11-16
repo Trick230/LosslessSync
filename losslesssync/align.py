@@ -658,6 +658,69 @@ def place_segments(segs: list[Segment], R: np.ndarray, S: np.ndarray, ref_dur: f
     return segs
 
 
+def _energy_db(x: np.ndarray, t0: float, t1: float, hop: int = 32, win: int = 64):
+    """Short-term level (dB) of x between t0 and t1 (s): one value per `hop` samples."""
+    sr = ANA_SR
+    i0, i1 = int(round(t0 * sr)), int(round(t1 * sr))
+    if i0 < 0 or i1 + win > len(x) or i1 <= i0:
+        return None
+    n = (i1 - i0) // hop
+    idx = i0 + np.arange(n)[:, None] * hop + np.arange(win)
+    return 10 * np.log10((x[idx] ** 2).mean(1) + 1e-12)
+
+
+def _snap(src16, s_t: float, kind: str, search: float = 0.08, ctx: float = 0.03,
+          drop_db: float = 15.0, floor_db: float = -55.0):
+    """Source time of the edit point near s_t: where the level falls (kind='end') or rises
+    (kind='start') by drop_db against the surrounding ctx. TV splices show up as such a
+    dip or step; returns None when there is none."""
+    hop = 32
+    step = hop / ANA_SR
+    e = _energy_db(src16, s_t - search - ctx, s_t + search + ctx, hop)
+    if e is None:
+        return None
+    c = int(round(ctx / step))
+    best = None
+    for i in range(c, len(e) - c):
+        if kind == "end":
+            ref_lvl = np.median(e[i - c:i])
+            ok = ref_lvl > floor_db and e[i] <= ref_lvl - drop_db
+        else:
+            ref_lvl = np.median(e[i:i + c])
+            ok = ref_lvl > floor_db and e[i - 1] <= ref_lvl - drop_db
+        if ok:
+            t = s_t - search - ctx + i * step
+            if best is None or abs(t - s_t) < abs(best - s_t):
+                best = t
+    return best
+
+
+def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float) -> list[Segment]:
+    """Move edges that border a gap onto the splice point visible in the source level.
+
+    place_segments works on 10 ms frames with smoothed similarity; this pins the cut to the
+    exact place the TV edit left in the source (a short dip or a step to silence), then
+    re-imposes that no source sample is used twice.
+    """
+    segs = sorted(segs, key=lambda s: s.ref_start)
+    for i, s in enumerate(segs):
+        prev = segs[i - 1] if i > 0 else None
+        nxt = segs[i + 1] if i + 1 < len(segs) else None
+        if s.ref_end < ref_dur - 0.01 and (nxt is None or nxt.ref_start - s.ref_end > 0.01):
+            t = _snap(src16, s.ref_end - s.offset, "end")
+            if t is not None:
+                s.ref_end = min(ref_dur, t + s.offset)
+        if s.ref_start > 0.01 and (prev is None or s.ref_start - prev.ref_end > 0.01):
+            t = _snap(src16, s.ref_start - s.offset, "start")
+            if t is not None:
+                s.ref_start = max(0.0, t + s.offset)
+    for a, b in zip(segs, segs[1:]):
+        b.ref_start = max(b.ref_start, a.ref_end)                    # no overlap on the ref
+        if b.offset > a.offset:                                      # no source reuse
+            b.ref_start = max(b.ref_start, a.ref_end - a.offset + b.offset)
+    return [s for s in segs if s.ref_end - s.ref_start > 0.1]
+
+
 # ---------------------------------------------------------------- pitch mode
 
 def detect_pitch_mode(ref16: np.ndarray, src16: np.ndarray, anchors: list[Anchor], k: float,

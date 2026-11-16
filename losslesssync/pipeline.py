@@ -198,6 +198,7 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     Sb = features(inter16, hp_s=0.15)
     segs = align.place_segments(segs, Rb, Sb, ref_dur, opt.chunk_s, k, ref16, inter16)
     del Rb, Sb
+    segs = align.refine_edges(segs, inter16, ref_dur)
     pieces = [{"start": s.ref_start, "end": s.ref_end, "offset": s.offset} for s in segs]
 
     report = {
