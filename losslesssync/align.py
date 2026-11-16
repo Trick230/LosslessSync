@@ -301,20 +301,46 @@ def fine_measure(ref16: np.ndarray, src16: np.ndarray, r0: float, off: float, le
     d, conf = gcc_phat(a, b, sr, max_lag)
     if conf >= phat_thr:
         return off + d, conf, "phat"
-    # fallback: 1 ms feature envelopes (works even when phase is not coherent)
+    # fallback: multi-band onset flux at 1 ms (works when phase is not coherent,
+    # e.g. a time-stretched source)
     m = int(max_lag * sr)
     if b0 - m < 0 or b0 + L + m > len(src16):
         return None
-    Fa = features(a, hop_s=0.001, n_fft=512, n_mels=24, hp_s=0.25)
-    Fb = features(src16[b0 - m:b0 + L + m], hop_s=0.001, n_fft=512, n_mels=24, hp_s=0.25)
-    M = int(round(max_lag / 0.001))
-    lags = np.arange(0, 2 * M + 1)
-    vals = local_ncc(Fa, Fb, lags)
-    j = int(np.argmax(vals))
-    if vals[j] < 0.25:
+    Fa = onset_flux(a)
+    Fb = onset_flux(src16[b0 - m:b0 + L + m])
+    n = Fa.shape[1]
+    nl = Fb.shape[1] - n + 1
+    if nl < 3:
         return None
-    lag = lags[j] + parabolic(vals, j)
-    return off + (M - lag) * 0.001, float(vals[j]), "env"
+    vals = np.array([(Fa * Fb[:, j:j + n]).sum() for j in range(nl)]) / Fa.size
+    j = int(np.argmax(vals))
+    if vals[j] < 0.12 or j == 0 or j == nl - 1:
+        return None
+    lag = j + parabolic(vals, j)
+    M = (nl - 1) / 2
+    return off + (M - lag) * FLUX_HOP / sr, float(vals[j]), "flux"
+
+
+FLUX_HOP = 16  # samples at 16 kHz = 1 ms
+
+
+def onset_flux(x: np.ndarray, n_fft: int = 256, n_bands: int = 8) -> np.ndarray:
+    """Half-wave rectified log-magnitude flux in log-spaced bands, 1 ms hop, z-scored."""
+    sr = ANA_SR
+    n = (len(x) - n_fft) // FLUX_HOP + 1
+    if n < 2:
+        return np.zeros((n_bands, 0), np.float32)
+    idx = np.arange(n)[:, None] * FLUX_HOP + np.arange(n_fft)
+    win = np.hanning(n_fft).astype(np.float32)
+    mag = np.abs(sfft.rfft(x[idx] * win, axis=1, workers=-1))
+    f = np.fft.rfftfreq(n_fft, 1.0 / sr)
+    edges = np.geomspace(150, 7000, n_bands + 1)
+    B = np.stack([np.log(mag[:, (f >= lo) & (f < hi)].mean(1) + 1e-5)
+                  for lo, hi in zip(edges[:-1], edges[1:])])
+    F = np.maximum(np.diff(B, axis=1), 0)
+    F -= F.mean(1, keepdims=True)
+    F /= F.std(1, keepdims=True) + 1e-9
+    return F.astype(np.float32)
 
 
 def fine_segments(segs: list[Segment], ref16, src16, k: float, chunk_s: float, progress=None):
@@ -332,14 +358,22 @@ def fine_segments(segs: list[Segment], ref16, src16, k: float, chunk_s: float, p
         summarize_fine(s)
 
 
+def phase_coherent(s: Segment) -> bool:
+    """Most windows phase-coherent: isolated GCC-PHAT hits in an incoherent source are
+    chance peaks and must not set the offset."""
+    ph = sum(f[3] == "phat" for f in s.fine)
+    return ph >= 2 and ph >= 0.5 * len(s.fine)
+
+
 def summarize_fine(s: Segment):
     ph = [f for f in s.fine if f[3] == "phat"]
-    use = ph if len(ph) >= 2 else (ph + [f for f in s.fine if f[3] == "env"])
+    coherent = phase_coherent(s)
+    use = ph if coherent else s.fine
     if use:
         vals = np.array([f[1] for f in use])
         s.offset = float(np.median(vals))
         s.spread_ms = float(1.4826 * np.median(np.abs(vals - s.offset)) * 1000)
-        s.method = "phat" if len(ph) >= 2 else "env"
+        s.method = "phat" if coherent else "flux"
     else:
         s.method = "coarse"
         s.spread_ms = None
@@ -353,6 +387,8 @@ def split_on_jumps(segs: list[Segment], k: float, chunk_s: float,
     while stack:
         s = stack.pop(0)
         ph = sorted([f for f in s.fine if f[3] == "phat"], key=lambda f: f[0])
+        if not phase_coherent(s):
+            ph = []
         best = None
         for i in range(3, len(ph) - 2):
             L = np.array([f[1] for f in ph[:i]])
@@ -380,6 +416,22 @@ def split_on_jumps(segs: list[Segment], k: float, chunk_s: float,
     return out
 
 
+def merge_equal(segs: list[Segment], k: float, chunk_s: float,
+                tol: float = 0.002) -> list[Segment]:
+    """Join segments that are neighbours on the ref timeline and share the same offset
+    (one continuous piece that was split around a weak or rejected passage)."""
+    segs = sorted(segs, key=lambda s: s.core(k, chunk_s)[0])
+    out: list[Segment] = []
+    for s in segs:
+        if out and out[-1].method != "coarse" and s.method != "coarse"                 and abs(out[-1].offset - s.offset) < tol:
+            m = Segment(anchors=out[-1].anchors + s.anchors, fine=out[-1].fine + s.fine)
+            summarize_fine(m)
+            out[-1] = m
+        else:
+            out.append(s)
+    return out
+
+
 def residual_drift(segs: list[Segment]) -> tuple[float, int, float]:
     """Pooled slope of fine offset vs time inside segments (0 when speed is exact)."""
     num = den = 0.0
@@ -387,7 +439,7 @@ def residual_drift(segs: list[Segment]) -> tuple[float, int, float]:
     span = 0.0
     for s in segs:
         ph = [f for f in s.fine if f[3] == "phat"]
-        if len(ph) < 3:
+        if len(ph) < 3 or not phase_coherent(s):
             continue
         t = np.array([f[0] for f in ph])
         o = np.array([f[1] for f in ph])
@@ -470,52 +522,54 @@ def best_cut(sA, sB, tau: float = 0.08, gap_pen: float = 3.0, expected_gap: int 
     """Ordered states A -> gap -> B over n frames. Returns (endA, startB) frame indices.
 
     expected_gap: gap length implied by a source that is continuous at the edit
-    (max(0, offB - offA)); that single-parameter explanation is preferred unless the free
-    solution scores clearly better.
+    (max(0, offB - offA)). A linear recording never plays the same source samples twice,
+    so the gap is at least that long; exactly that length is preferred unless a longer
+    gap scores clearly better.
     """
-    if sA is not None and sB is not None and expected_gap is not None:
-        free = best_cut(sA, sB, tau, gap_pen)
-        n = len(sA)
-        g = expected_gap
-        if g < n:
-            PA = np.concatenate([[0.0], np.cumsum(sA)])
-            PB = np.concatenate([[0.0], np.cumsum(sB)])
-            c1 = np.arange(0, n - g + 1)
-            st = PA[c1] + tau * g - gap_pen * (g > 0) + PB[-1] - PB[c1 + g]
-            j = int(np.argmax(st))
-            fa, fb = free
-            fs = PA[fa] + tau * (fb - fa) - gap_pen * (fb > fa) + PB[-1] - PB[fb]
-            if st[j] + prior_margin >= fs:
-                return int(c1[j]), int(c1[j] + g)
-        return free
     n = len(sA) if sA is not None else len(sB)
     PA = np.concatenate([[0.0], np.cumsum(sA)]) if sA is not None else None
     PB = np.concatenate([[0.0], np.cumsum(sB)]) if sB is not None else None
     PG = tau * np.arange(n + 1)
     if PA is None:   # gap -> B
         val = PG - PB + PB[-1] - gap_pen * (np.arange(n + 1) > 0)
-        c = int(np.argmax(val))
-        return 0, c
+        return 0, int(np.argmax(val))
     if PB is None:   # A -> gap
         val = PA + PG[-1] - PG - gap_pen * (np.arange(n + 1) < n)
-        c = int(np.argmax(val))
-        return c, n
-    direct = PA + PB[-1] - PB
-    cd = int(np.argmax(direct))
-    best = (direct[cd], cd, cd)
-    pre = PA - PG
-    run_max = np.maximum.accumulate(pre)
-    run_arg = np.zeros(n + 1, np.int64)
-    a = 0
-    for i in range(n + 1):
-        if pre[i] >= pre[a]:
-            a = i
-        run_arg[i] = a
-    gapv = run_max[:-1] + (PG[1:] - PB[1:]) + PB[-1] - gap_pen
-    c2 = int(np.argmax(gapv)) + 1
-    if gapv[c2 - 1] > best[0]:
-        best = (gapv[c2 - 1], int(run_arg[c2 - 1]), c2)
-    return best[1], best[2]
+        return int(np.argmax(val)), n
+    g = max(0, int(expected_gap or 0))
+    if g >= n:
+        return 0, n
+
+    def score(c1, c2):
+        return PA[c1] + PG[c2] - PG[c1] - gap_pen * (c2 > c1) + PB[-1] - PB[c2]
+
+    # free solution with gap >= g (gap of 0 allowed only when g == 0)
+    cands = []
+    if g == 0:
+        c = int(np.argmax(PA + PB[-1] - PB))
+        cands.append((c, c))
+    mg = max(g, 1)
+    if mg <= n:
+        pre = PA - PG
+        run_arg = np.zeros(n + 1, np.int64)
+        a = 0
+        for i in range(n + 1):
+            if pre[i] >= pre[a]:
+                a = i
+            run_arg[i] = a
+        c2s = np.arange(mg, n + 1)
+        vals = pre[run_arg[c2s - mg]] + PG[c2s] - PB[c2s]
+        j = int(np.argmax(vals))
+        cands.append((int(run_arg[c2s[j] - mg]), int(c2s[j])))
+    free = max(cands, key=lambda c: score(*c))
+    if expected_gap is None:
+        return free
+    c1 = np.arange(0, n - g + 1)
+    st = PA[c1] + tau * g - gap_pen * (g > 0) + PB[-1] - PB[c1 + g]
+    j = int(np.argmax(st))
+    if st[j] + prior_margin >= score(*free):
+        return int(c1[j]), int(c1[j] + g)
+    return free
 
 
 def place_segments(segs: list[Segment], R: np.ndarray, S: np.ndarray, ref_dur: float,
@@ -609,8 +663,6 @@ def place_segments(segs: list[Segment], R: np.ndarray, S: np.ndarray, ref_dur: f
 def detect_pitch_mode(ref16: np.ndarray, src16: np.ndarray, anchors: list[Anchor], k: float,
                       chunk_s: float, bpo: int = 96) -> tuple[str, dict]:
     expected = np.log2(k) * bpo
-    if abs(expected) < 1.5:
-        return "resample", {"expected_shift_bins": float(expected)}
     sr, n_fft = ANA_SR, 4096
     grid = 120.0 * 2 ** (np.arange(int(5.0 * bpo)) / bpo)
     lin = np.fft.rfftfreq(n_fft, 1.0 / sr)
@@ -649,6 +701,7 @@ def detect_pitch_mode(ref16: np.ndarray, src16: np.ndarray, anchors: list[Anchor
     at0 = acc[D]
     e = int(round(expected))
     at_exp = acc[D + e] if abs(e) <= D else -np.inf
-    mode = "resample" if at_exp >= at0 else "tempo"
+    # no speed change: nothing to choose, but the measured shift is still reported
+    mode = "resample" if abs(expected) < 1.5 or at_exp >= at0 else "tempo"
     return mode, {"frames": used, "best_shift_bins": best, "expected_shift_bins": float(expected),
                   "score_shifted": float(at_exp), "score_unshifted": float(at0)}

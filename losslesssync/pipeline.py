@@ -148,6 +148,12 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
             log(f"  pitch: {'speed-up with pitch shift -> resample' if mode == 'resample' else 'pitch already corrected -> time-stretch'}"
                 f" (shift {pitch_info.get('best_shift_bins')} bins, "
                 f"expected {pitch_info.get('expected_shift_bins', 0):.1f})")
+        elif abs(pitch_info.get("best_shift_bins") or 0) >= 4:
+            sh = pitch_info["best_shift_bins"]
+            log(f"  WARNING: source pitch is {sh:+d}/96 octave ({(2 ** (sh / 96) - 1) * 100:+.1f}%) "
+                f"off the reference: it was probably time-stretched from PAL with the pitch "
+                f"kept; that removes phase coherence, so timing is limited to ~1 ms. "
+                f"The original (unstretched) recording would sync sample-exact.")
     else:
         mode, pitch_info = opt.pitch, {}
 
@@ -168,11 +174,24 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         break
     segs = align.split_on_jumps(segs, k, opt.chunk_s)
     dropped = [s for s in segs if s.method == "coarse" and len(s.anchors) < 4]
+    # an unconfirmed segment whose offset is close to a confirmed neighbour's is that
+    # neighbour mis-measured in a weak passage (e.g. dialogue only); let it extend instead
+    conf = sorted((s for s in segs if s.method != "coarse"), key=lambda s: s.core(k, opt.chunk_s)[0])
+    for s in segs:
+        if s.method != "coarse" or s in dropped:
+            continue
+        c = s.core(k, opt.chunk_s)[0]
+        before = [x for x in conf if x.core(k, opt.chunk_s)[0] < c]
+        after = [x for x in conf if x.core(k, opt.chunk_s)[0] > c]
+        near = ([before[-1]] if before else []) + ([after[0]] if after else [])
+        if any(abs(s.offset - x.offset) < 0.5 for x in near):
+            dropped.append(s)
     segs = [s for s in segs if s not in dropped]
     if dropped:
         log(f"  dropped {len(dropped)} unconfirmed segment(s)")
     if not segs:
         raise media.MediaError("no segment could be confirmed by fine alignment")
+    segs = align.merge_equal(segs, k, opt.chunk_s)
 
     log("placing cut points...")
     Rb = features(ref16, hp_s=0.15)
