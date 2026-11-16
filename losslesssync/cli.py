@@ -60,6 +60,9 @@ def main(argv=None):
     s.add_argument("--tmp", help="directory for temporary files (default: next to output)")
     s.set_defaults(fn=cmd_sync)
 
+    g = sub.add_parser("gui", help="open the graphical interface")
+    g.set_defaults(fn=lambda a: __import__("losslesssync.gui", fromlist=["main"]).main())
+
     args = p.parse_args(argv)
     try:
         args.fn(args)

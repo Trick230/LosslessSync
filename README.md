@@ -22,6 +22,7 @@ pip install -e .
 losslesssync probe episode.mkv tv.ts
 losslesssync sync --ref episode.mkv --src tv.ts -o pt.flac --report pt.json
 losslesssync sync --ref episode.mkv --src tv.ts -o pt.flac --mux episode_pt.mkv
+losslesssync gui          # or: python -m losslesssync gui
 ```
 
 Useful options: `--ref-track N` / `--src-track N` (a:N from `probe`), `--speed pal|1|1001/960`,

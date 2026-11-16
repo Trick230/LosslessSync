@@ -12,5 +12,8 @@ dependencies = ["numpy", "scipy"]
 [project.scripts]
 losslesssync = "losslesssync.cli:main"
 
+[project.gui-scripts]
+losslesssync-gui = "losslesssync.gui:main"
+
 [tool.setuptools]
 packages = ["losslesssync"]
