@@ -10,7 +10,7 @@ from scipy import fft as sfft
 from scipy.signal import fftconvolve
 from scipy.ndimage import uniform_filter1d
 
-from .features import ANA_SR, _TLS, _nw, features, frame_rms_db, pool
+from .features import ANA_SR, _TLS, _nw, features, frame_rms_db, n_threads, pool
 
 HOP = 0.01          # coarse feature hop (100 fps)
 POOL = 4            # global search runs at 25 fps
@@ -309,7 +309,7 @@ def pmap(fn, items) -> list:
     if len(items) < 4 or getattr(_TLS, "in_pool", False):
         return [fn(x) for x in items]   # nested: already on a pool thread
     if _POOL is None:
-        _POOL = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
+        _POOL = ThreadPoolExecutor(max_workers=n_threads())
 
     def run(x):
         _TLS.in_pool = True

@@ -78,6 +78,22 @@ Prints the edit list without rendering.
 losslesssync sync --ref episode.mkv --src tv.ts --analyze-only
 ```
 
+### Batch: a whole season
+
+```
+losslesssync batch --ref-dir season5 --out-dir synced -j 2
+```
+
+Pairs reference and source files by episode code in the name (`S05E01`, `T05E01`,
+`5x01`). When both are in the same folder, the language word in the name (`EN` / `PT`)
+tells them apart; otherwise use `--src-dir`, or `--ref-glob` / `--src-glob`. Each episode
+gets `<source>_synced.flac`, a JSON report and a log in the output folder, plus
+`batch_summary.json` for the run. Episodes already done are skipped (`--overwrite` redoes
+them), a failing episode does not stop the rest, and episodes with dropouts or a p95
+error above 1 ms are listed for checking. `--dry-run` shows the pairing only. `-j 2` runs
+two episodes at once (about 0.9 GB RAM each); the sync options above apply to every
+episode.
+
 ### Graphical interface
 
 ```

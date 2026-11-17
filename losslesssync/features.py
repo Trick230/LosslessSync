@@ -6,6 +6,7 @@ band. Correlation of these sequences is dominated by the common M&E content.
 """
 from __future__ import annotations
 
+import os
 import threading
 
 import numpy as np
@@ -17,9 +18,17 @@ ANA_SR = 16000
 _TLS = threading.local()
 
 
+def n_threads() -> int:
+    """Cores this process may use; LOSSLESSSYNC_THREADS caps it (batch runs in parallel)."""
+    try:
+        return max(1, int(os.environ.get("LOSSLESSSYNC_THREADS", "")))
+    except ValueError:
+        return os.cpu_count() or 4
+
+
 def _nw() -> int:
-    """FFT worker count: all cores, or one inside a pool task (already parallel)."""
-    return 1 if getattr(_TLS, "in_pool", False) else -1
+    """FFT worker count: all allowed cores, or one inside a pool task (already parallel)."""
+    return 1 if getattr(_TLS, "in_pool", False) else n_threads()
 
 
 def mel_filterbank(sr: int, n_fft: int, n_mels: int, fmin: float, fmax: float) -> np.ndarray:
