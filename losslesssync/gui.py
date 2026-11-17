@@ -69,7 +69,7 @@ class App(tk.Tk):
         self.codec = tk.StringVar(value="auto")
         self.bitrate = tk.StringVar(value="")
         self.lang = tk.StringVar(value="por")
-        self.fade = tk.StringVar(value="120")
+        self.fade = tk.StringVar(value="300")
         items = [("Velocidade", self.speed, ["auto", "pal", "pal24", "ntsc", "1", "1001/960"], False),
                  ("Pitch", self.pitch, ["auto", "resample", "tempo"], True),
                  ("Partes em falta", self.fill, ["silence", "ref"], True),
@@ -164,7 +164,7 @@ class App(tk.Tk):
         try:
             return max(0.0, float(self.fade.get().replace(",", ".")))
         except ValueError:
-            return 120.0
+            return 300.0
 
     def _track_index(self, key):
         v = self.track[key].get()

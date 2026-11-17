@@ -27,7 +27,7 @@ class Options:
     speed: str = "auto"          # auto | pal | pal24 | ntsc | 1 | <float> | <a/b>
     pitch: str = "auto"          # auto | resample | tempo
     fill: str = "silence"        # silence | ref
-    fade_ms: float = 120.0        # fade at edges next to a gap
+    fade_ms: float = 300.0        # fade at edges next to a gap
     codec: str | None = None
     bitrate: str | None = None
     language: str = "por"
