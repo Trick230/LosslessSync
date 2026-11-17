@@ -695,6 +695,22 @@ def _snap(src16, s_t: float, kind: str, search: float = 0.08, ctx: float = 0.03,
     return best
 
 
+def _splice_point(src16, s_t: float, search: float = 0.5, smooth: float = 0.01,
+                  drop_db: float = 20.0):
+    """Source time of the deepest level dip within +-search of s_t (a TV splice inside
+    continuous source), or None when nothing dips drop_db below the window's median."""
+    hop = 32
+    step = hop / ANA_SR
+    e = _energy_db(src16, s_t - search, s_t + search, hop)
+    if e is None or len(e) < 3:
+        return None
+    e = uniform_filter1d(e, max(1, int(round(smooth / step))), mode="nearest")
+    i = int(np.argmin(e))
+    if e[i] > np.median(e) - drop_db:
+        return None
+    return s_t - search + i * step
+
+
 def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float) -> list[Segment]:
     """Move edges that border a gap onto the splice point visible in the source level.
 
@@ -703,14 +719,24 @@ def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float) -> list
     re-imposes that no source sample is used twice.
     """
     segs = sorted(segs, key=lambda s: s.ref_start)
+    split = set()
+    for i, (a, b) in enumerate(zip(segs, segs[1:])):
+        # Source runs on across the cut: the TV edit is somewhere in it, and the ref gap
+        # does not say where, so look wider for the splice and cut both edges there.
+        s_a, s_b = a.ref_end - a.offset, b.ref_start - b.offset
+        if b.offset > a.offset and abs(s_b - s_a) < 0.05:
+            t = _splice_point(src16, 0.5 * (s_a + s_b))
+            if t is not None:
+                a.ref_end, b.ref_start = t + a.offset, t + b.offset
+                split.update((("end", i), ("start", i + 1)))
     for i, s in enumerate(segs):
         prev = segs[i - 1] if i > 0 else None
         nxt = segs[i + 1] if i + 1 < len(segs) else None
-        if s.ref_end < ref_dur - 0.01 and (nxt is None or nxt.ref_start - s.ref_end > 0.01):
+        if ("end", i) not in split and s.ref_end < ref_dur - 0.01 and (nxt is None or nxt.ref_start - s.ref_end > 0.01):
             t = _snap(src16, s.ref_end - s.offset, "end")
             if t is not None:
                 s.ref_end = min(ref_dur, t + s.offset)
-        if s.ref_start > 0.01 and (prev is None or s.ref_start - prev.ref_end > 0.01):
+        if ("start", i) not in split and s.ref_start > 0.01 and (prev is None or s.ref_start - prev.ref_end > 0.01):
             t = _snap(src16, s.ref_start - s.offset, "start")
             if t is not None:
                 s.ref_start = max(0.0, t + s.offset)
