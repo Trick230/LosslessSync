@@ -901,7 +901,8 @@ def find_opening(segs: list[Segment], ref16, src16, ref_dur: float,
 
 def track_offsets(ref16, src16, Rb, Sb, base_off: float, t0: float, t1: float,
                   win: float = 1.5, step: float = 0.25, max_jump: float = 1.5,
-                  min_ncc: float = 0.25, min_ratio: float = 1.1) -> list[tuple]:
+                  min_ncc: float = 0.25, min_ratio: float = 1.1, coarse: int = 4,
+                  edge: int = 8, tol: float = 0.002) -> list[tuple]:
     """Offset measured in short sliding ref windows over [t0, t1), searching +-max_jump
     around base_off: (window centre, offset, confidence, method) where it is reliable."""
     fps = 1.0 / HOP
@@ -937,7 +938,24 @@ def track_offsets(ref16, src16, Rb, Sb, base_off: float, t0: float, t1: float,
                 return (t + win / 2, res[0], res[1], res[2])
         return None
 
-    return [o for o in pmap(one, starts) if o is not None]
+    # Measure on a coarse grid first and fill in the full grid only between neighbours
+    # that disagree (or where a window failed). Dropouts only move the offset forward and
+    # edits leave windows unmatched, so two coarse windows at one offset cannot have a
+    # change between them. The dense grid is used at both ends of the range and for
+    # `edge` windows on both sides of every disagreement, so a short run next to a change
+    # still gets the consecutive measurements offset_runs needs to confirm it.
+    n = len(starts)
+    first = sorted(set(range(0, n, coarse)) | set(range(min(n, edge)))
+                   | set(range(max(0, n - edge), n)))
+    res = dict(zip(first, pmap(lambda i: one(starts[i]), first)))
+    fill = set()
+    for i, j in zip(first, first[1:]):
+        a, b = res[i], res[j]
+        if j - i > 1 and (a is None or b is None or abs(a[1] - b[1]) >= tol):
+            fill.update(range(max(0, i - edge), min(n, j + edge + 1)))
+    fill = sorted(fill - res.keys())
+    res.update(zip(fill, pmap(lambda i: one(starts[i]), fill)))
+    return [res[i] for i in sorted(res) if res[i] is not None]
 
 
 def offset_runs(obs: list[tuple], tol: float = 0.004, min_n: int = 4) -> list[list[tuple]]:
