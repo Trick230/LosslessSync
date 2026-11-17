@@ -50,8 +50,8 @@ def main(argv=None):
                    help="resample = undo PAL speed-up incl. pitch; tempo = keep pitch")
     s.add_argument("--fill", default="silence", choices=["silence", "ref"],
                    help="what to put where the source has no matching content")
-    s.add_argument("--fade-ms", type=float, default=40.0,
-                   help="fade length (ms) where the track meets a gap (default 40)")
+    s.add_argument("--fade-ms", type=float, default=120.0,
+                   help="fade length (ms) where the track meets a gap (default 120)")
     s.add_argument("--codec", choices=list(media.CODECS), help="override output codec")
     s.add_argument("--bitrate", help="bitrate for lossy codecs, e.g. 448k")
     s.add_argument("--language", default="por", help="language tag of the output track")

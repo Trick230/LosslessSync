@@ -35,7 +35,7 @@ def _copy(w: WavWriter, src: np.ndarray, a: int, n: int, fade_in: int, fade_out:
 
 
 def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
-           fill: WavInfo | None = None, fade_ms: float = 40.0, splice_ms: float = 4.0):
+           fill: WavInfo | None = None, fade_ms: float = 120.0, splice_ms: float = 4.0):
     """pieces: sorted, non-overlapping {'start','end' (ref s), 'offset' (s)} on the ref timeline.
 
     Edges next to a gap fade over fade_ms (inside the piece, so no extra source is used);
