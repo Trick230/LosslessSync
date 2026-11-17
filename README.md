@@ -113,7 +113,7 @@ Or `python -m losslesssync gui`.
 | `--ref-lang` | `eng,jpn` | Preferred reference languages |
 | `--src-track N` | auto | Source audio track (`a:N`) |
 | `--speed` | `auto` | `auto`, `pal`, `1`, or an exact ratio such as `1001/960` |
-| `--pitch` | `auto` | `auto`, `resample` or `tempo` |
+| `--pitch` | `auto` | `auto`, `resample`, `tempo` or `keep` (cut on the resampled source, render it stretched with Rubber Band R3 so the original PAL pitch is kept on the film timing) |
 | `--fill` | `silence` | What fills gaps: `silence` or `ref` |
 | `--fade-ms` | `300` | Fade at the edges of gaps |
 | `--fade-opening` | off | Also fade into the opening titles |

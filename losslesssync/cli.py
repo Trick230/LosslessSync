@@ -48,8 +48,10 @@ def add_common(s):
     s.add_argument("--src-track", type=int, help="source audio track (a:N)")
     s.add_argument("--speed", default="auto",
                    help="auto | pal (25 from 23.976) | pal24 | ntsc | 1 | ratio like 1001/960")
-    s.add_argument("--pitch", default="auto", choices=["auto", "resample", "tempo"],
-                   help="resample = undo PAL speed-up incl. pitch; tempo = keep pitch")
+    s.add_argument("--pitch", default="auto", choices=["auto", "resample", "tempo", "keep"],
+                   help="resample = undo PAL speed-up incl. pitch; tempo = keep pitch; "
+                        "keep = cut on the resampled source, render it stretched with "
+                        "Rubber Band R3 keeping the original (PAL) pitch")
     s.add_argument("--fill", default="silence", choices=["silence", "ref"],
                    help="what to put where the source has no matching content")
     s.add_argument("--fade-ms", type=float, default=300.0,

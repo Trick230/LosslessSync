@@ -123,14 +123,24 @@ def decode_mono(path: str, stream: AudioStream, sr: int = 16000) -> np.ndarray:
     return np.frombuffer(r.stdout, dtype=np.float32)
 
 
+RB_ENGINE_FINER = 0x20000000
+
+
 def speed_filter(k: float, sr: int, mode: str) -> str:
     """Filter that stretches the source timeline by k (k > 1 slows down / lengthens).
 
     mode 'resample': plain resampling (pitch changes with speed, i.e. undoes a PAL speed-up).
     mode 'tempo': time stretch keeping pitch (source whose pitch was already corrected).
+    mode 'keep': time stretch keeping pitch with Rubber Band R3 (finer engine), formants
+    preserved and channels linked; used to keep the PAL pitch on the film timing.
     """
     if abs(k - 1.0) < 1e-12:
         return "anull"
+    if mode == "keep":
+        # ffmpeg ORs its option fields into the RubberBandOptions word; it has no engine
+        # field, so the R3 bit (RubberBandOptionEngineFiner) rides on 'transients'
+        return (f"rubberband=tempo={1.0 / k:.12f}:transients={RB_ENGINE_FINER}"
+                f":formant=preserved:channels=together")
     if mode == "tempo":
         return f"rubberband=tempo={1.0 / k:.12f}:pitchq=quality:transients=mixed"
     frac = Fraction(k).limit_denominator(40000)

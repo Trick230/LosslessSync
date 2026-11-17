@@ -25,7 +25,7 @@ class Options:
     src_track: int | None = None
     ref_langs: tuple[str, ...] = ("eng", "jpn")
     speed: str = "auto"          # auto | pal | pal24 | ntsc | 1 | <float> | <a/b>
-    pitch: str = "auto"          # auto | resample | tempo
+    pitch: str = "auto"          # auto | resample | tempo | keep
     fill: str = "silence"        # silence | ref
     fade_ms: float = 300.0        # fade at edges next to a gap
     fade_opening: bool = False   # also fade into the opening titles
@@ -157,6 +157,9 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
                 f"off the reference: it was probably time-stretched from PAL with the pitch "
                 f"kept; that removes phase coherence, so timing is limited to ~1 ms. "
                 f"The original (unstretched) recording would sync sample-exact.")
+    elif opt.pitch == "keep":
+        # analyse on the plain resampled source (sample-exact); the stretch comes at render
+        mode, pitch_info = "resample", {}
     else:
         mode, pitch_info = opt.pitch, {}
 
@@ -252,6 +255,8 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     log_segments(log, report)
 
     if not opt.analyze_only and out_path:
+        if opt.pitch == "keep" and abs(k - 1) > 1e-4:
+            inter_wav = keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report)
         info = read_info(inter_wav)
         n_out = int(round(ref_dur * info.sr))
         fill = None
@@ -292,6 +297,34 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     prog("done", 1.0)
     log("done")
     return report
+
+
+def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report) -> str:
+    """Stretch the source to the film timing keeping its pitch (Rubber Band R3) and shift
+    the pieces by the stretcher's latency, measured against the resampled source."""
+    log("time-stretching source keeping its pitch (Rubber Band R3)...")
+    keep_wav = os.path.join(tmp, "keep.wav")
+    keep16 = media.make_intermediate(src_path, src_st, k, "keep", keep_wav, ANA_SR)
+    dur = min(len(inter16), len(keep16)) / ANA_SR
+    ts = np.arange(10.0, dur - 16.0, 5.0)
+    res = align.pmap(lambda t: align.fine_measure(inter16, keep16, t, 0.0, 6.0, max_lag=0.2), ts)
+    ok = [(t, r[0]) for t, r in zip(ts, res) if r is not None]
+    if len(ok) < 10:
+        raise media.MediaError("could not measure the time-stretch latency")
+    t, off = (np.array(x) for x in zip(*ok))
+    lat = float(np.median(off))
+    dev = np.abs(off - lat) * 1000
+    slope = float(np.polyfit(t, off, 1)[0]) if len(t) > 2 else 0.0
+    log(f"  stretch latency {lat * 1000:+.3f} ms over {len(off)} windows: "
+        f"median deviation {np.median(dev):.3f} ms, p95 {np.percentile(dev, 95):.3f} ms, "
+        f"drift {slope * 1e6:+.2f} ppm")
+    report["keep_pitch"] = {"engine": "rubberband R3", "latency_ms": lat * 1000,
+                            "windows": len(off), "median_dev_ms": float(np.median(dev)),
+                            "p95_dev_ms": float(np.percentile(dev, 95)), "drift_ppm": slope * 1e6}
+    report["stretch_mode"] = "keep"
+    for p in pieces:
+        p["offset"] += lat
+    return keep_wav
 
 
 def log_segments(log, report):

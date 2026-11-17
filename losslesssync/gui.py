@@ -71,7 +71,7 @@ class App(tk.Tk):
         self.lang = tk.StringVar(value="por")
         self.fade = tk.StringVar(value="300")
         items = [("Velocidade", self.speed, ["auto", "pal", "pal24", "ntsc", "1", "1001/960"], False),
-                 ("Pitch", self.pitch, ["auto", "resample", "tempo"], True),
+                 ("Pitch", self.pitch, ["auto", "resample", "tempo", "keep"], True),
                  ("Partes em falta", self.fill, ["silence", "ref"], True),
                  ("Codec", self.codec, ["auto"] + list(media.CODECS), True)]
         for c, (label, v, vals, ro) in enumerate(items):
