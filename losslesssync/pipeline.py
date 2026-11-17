@@ -11,7 +11,7 @@ from fractions import Fraction
 
 import numpy as np
 
-from . import align, media, wsola
+from . import align, media, report_html, wsola
 from .features import ANA_SR, features
 from .render import render
 from .wavio import read_info
@@ -70,7 +70,7 @@ class Log:
 
 def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float = 6.0,
            step: float = 10.0) -> dict:
-    errs, methods = [], []
+    errs, methods, points = [], [], []
     total = 0
     for p in pieces:
         t = p["start"] + 1.0
@@ -80,11 +80,13 @@ def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float 
             if r is not None:
                 errs.append(r[0])
                 methods.append(r[2])
+            # window centre and signed error (ms), None where nothing could be measured
+            points.append([round(t + win / 2, 3), None if r is None else round(r[0] * 1000, 4)])
             t += step
     if not errs:
-        return {"windows": total, "measured": 0}
+        return {"windows": total, "measured": 0, "points": points}
     e = np.abs(np.array(errs)) * 1000
-    return {"windows": total, "measured": len(errs),
+    return {"windows": total, "measured": len(errs), "points": points,
             "phat": sum(m == "phat" for m in methods),
             "median_abs_ms": float(np.median(e)), "p95_abs_ms": float(np.percentile(e, 95)),
             "max_abs_ms": float(e.max()), "within_1ms_pct": float((e <= 1.0).mean() * 100)}
@@ -294,11 +296,20 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
             log(f"  NOTE: the reference audio track starts at {ref_st.start_time * 1000:+.1f} ms; "
                 f"give the synced track the same delay when muxing by hand")
     if opt.report:
-        with open(opt.report, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2)
+        write_report(report, opt.report)
     prog("done", 1.0)
     log("done")
     return report
+
+
+def write_report(report: dict, path: str):
+    """JSON report, or a self-contained HTML page when the path ends in .htm/.html."""
+    if path.lower().endswith((".html", ".htm")):
+        text = report_html.episode_page(report)
+    else:
+        text = json.dumps(report, indent=2)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt) -> str:

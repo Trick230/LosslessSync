@@ -11,6 +11,7 @@ import traceback
 import unicodedata
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+from . import report_html
 from .pipeline import Options, sync
 
 MEDIA_EXT = {".mkv", ".m2ts", ".mts", ".ts", ".mp4", ".m4v", ".mka", ".wav", ".w64", ".flac",
@@ -123,6 +124,19 @@ def run_episode(ref: str, src: str, out: str, rep: str, log_path: str, opt: Opti
             return {"status": "error", "seconds": time.time() - t0, "error": f"{type(e).__name__}: {e}"}
 
 
+def episode_html(rep: str, p95_ms: float) -> str | None:
+    """Write the episode's HTML report next to its JSON one; None if there is no report."""
+    try:
+        with open(rep, encoding="utf-8") as f:
+            report = json.load(f)
+    except (OSError, ValueError):
+        return None
+    page = os.path.splitext(rep)[0] + ".html"
+    with open(page, "w", encoding="utf-8") as f:
+        f.write(report_html.episode_page(report, p95_ms))
+    return page
+
+
 def needs_check(r: dict, p95_ms: float) -> list[str]:
     if r.get("status") == "error":
         return ["failed, see log"]
@@ -199,11 +213,13 @@ def batch(ref_dir: str, src_dir: str, out_dir: str, opt: Options, fmt: str = "fl
     for k, ref, src, out, rep, lp, _ in tasks:
         r = results[k]
         episodes.append({"episode": k, "reference": ref, "source": src, "output": out,
-                         "report": rep, "log": lp, **r,
+                         "report": rep, "log": lp, **r, "html": episode_html(rep, check_p95_ms),
                          "check": needs_check(r, check_p95_ms)})
     summary = {"seconds": time.time() - t0, "jobs": jobs, "warnings": warn, "episodes": episodes}
     with open(os.path.join(out_dir, "batch_summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
+    with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write(report_html.batch_index(summary, out_dir))
 
     log_fn("")
     log_fn("episode   status   coverage  median ms  p95 ms  dropouts  check")
@@ -217,5 +233,5 @@ def batch(ref_dir: str, src_dir: str, out_dir: str, opt: Options, fmt: str = "fl
     n_err = sum(e["status"] == "error" for e in episodes)
     log_fn(f"{len(episodes) - n_err}/{len(episodes)} ok, {n_err} error(s), "
            f"{sum(bool(e['check']) for e in episodes)} to check; "
-           f"total {summary['seconds']:.0f} s; summary in {os.path.join(out_dir, 'batch_summary.json')}")
+           f"total {summary['seconds']:.0f} s; report in {os.path.join(out_dir, 'index.html')}")
     return summary

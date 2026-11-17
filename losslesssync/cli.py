@@ -86,7 +86,7 @@ def main(argv=None):
     s.add_argument("-o", "--output", help="output audio (.flac/.wav/.ac3/.eac3/.m4a/.mka)")
     add_common(s)
     s.add_argument("--mux", help="also write an MKV: reference file + synced track")
-    s.add_argument("--report", help="write a JSON report")
+    s.add_argument("--report", help="write a report: JSON, or an HTML page if the name ends in .html")
     s.add_argument("--analyze-only", action="store_true", help="only print the edit list")
     s.add_argument("--keep-temp", action="store_true")
     s.set_defaults(fn=cmd_sync)

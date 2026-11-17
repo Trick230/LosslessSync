@@ -87,8 +87,8 @@ losslesssync batch --ref-dir season5 --out-dir synced -j 2
 Pairs reference and source files by episode code in the name (`S05E01`, `T05E01`,
 `5x01`). When both are in the same folder, the language word in the name (`EN` / `PT`)
 tells them apart; otherwise use `--src-dir`, or `--ref-glob` / `--src-glob`. Each episode
-gets `<source>_synced.flac`, a JSON report and a log in the output folder, plus
-`batch_summary.json` for the run. Episodes already done are skipped (`--overwrite` redoes
+gets `<source>_synced.flac`, a JSON and an HTML report and a log in the output folder,
+plus `batch_summary.json` and `index.html` (all episodes, linking their pages) for the run. Episodes already done are skipped (`--overwrite` redoes
 them), a failing episode does not stop the rest, and episodes with dropouts or a p95
 error above 1 ms are listed for checking. `--dry-run` shows the pairing only. `-j 2` runs
 two episodes at once (about 0.9 GB RAM each); the sync options above apply to every
@@ -123,7 +123,7 @@ Or `python -m losslesssync gui`.
 | `--bitrate` | | Bitrate for lossy codecs, for example `448k` |
 | `--language` | `por` | Language tag of the output track |
 | `--mux` | | Also write an MKV: the reference file plus the synced track |
-| `--report` | | Write a JSON report |
+| `--report` | | Write a report: JSON, or an HTML page if the name ends in `.html` |
 | `--analyze-only` | off | Only print the edit list |
 | `--keep-temp` | off | Keep intermediate files |
 | `--tmp` | next to output | Directory for temporary files |
@@ -158,8 +158,11 @@ The log lists:
 - the opening titles
 - a final timing check against the reference
 
-`--report` writes the same information as JSON: segments, gaps, `dropouts` and
-`opening_segment`.
+`--report` writes the same information as JSON (segments, gaps, `dropouts`,
+`opening_segment` and the per-window timing check). A name ending in `.html` writes a
+self-contained page instead: what to review (dropouts, windows off by more than 1 ms, low
+coverage), a timeline of segments, cuts, gaps and dropouts, a plot of the timing error per
+window, and the tables.
 
 ## Testing
 
