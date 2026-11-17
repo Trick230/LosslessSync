@@ -27,6 +27,7 @@ class Options:
     speed: str = "auto"          # auto | pal | pal24 | ntsc | 1 | <float> | <a/b>
     pitch: str = "auto"          # auto | resample | tempo
     fill: str = "silence"        # silence | ref
+    fade_ms: float = 40.0        # fade at edges next to a gap
     codec: str | None = None
     bitrate: str | None = None
     language: str = "por"
@@ -237,7 +238,7 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         log("rendering...")
         prog("render", 0.0)
         out_wav = os.path.join(tmp, "out.wav")
-        render(info, pieces, n_out, out_wav, fill)
+        render(info, pieces, n_out, out_wav, fill, fade_ms=opt.fade_ms)
         log("verifying result against the reference...")
         prog("verify", 0.0)
         out_st = media.audio_streams(out_wav)[0]

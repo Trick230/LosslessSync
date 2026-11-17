@@ -69,6 +69,7 @@ class App(tk.Tk):
         self.codec = tk.StringVar(value="auto")
         self.bitrate = tk.StringVar(value="")
         self.lang = tk.StringVar(value="por")
+        self.fade = tk.StringVar(value="40")
         items = [("Velocidade", self.speed, ["auto", "pal", "pal24", "ntsc", "1", "1001/960"], False),
                  ("Pitch", self.pitch, ["auto", "resample", "tempo"], True),
                  ("Partes em falta", self.fill, ["silence", "ref"], True),
@@ -81,9 +82,11 @@ class App(tk.Tk):
         ttk.Entry(opts, textvariable=self.bitrate, width=12).grid(row=1, column=1, sticky="w", **pad)
         ttk.Label(opts, text="Idioma").grid(row=1, column=2, sticky="e", **pad)
         ttk.Entry(opts, textvariable=self.lang, width=12).grid(row=1, column=3, sticky="w", **pad)
+        ttk.Label(opts, text="Fade (ms)").grid(row=1, column=4, sticky="e", **pad)
+        ttk.Entry(opts, textvariable=self.fade, width=12).grid(row=1, column=5, sticky="w", **pad)
         self.analyze_only = tk.BooleanVar(value=False)
         ttk.Checkbutton(opts, text="Só analisar", variable=self.analyze_only).grid(
-            row=1, column=4, columnspan=2, sticky="w", **pad)
+            row=1, column=6, columnspan=2, sticky="w", **pad)
 
         run = ttk.Frame(self)
         run.pack(fill="x", **pad)
@@ -157,6 +160,12 @@ class App(tk.Tk):
         if self.do_mux.get() and not self.var["mux"].get() and self.var["ref"].get():
             self.var["mux"].set(os.path.splitext(self.var["ref"].get())[0] + "_PT.mkv")
 
+    def _fade_ms(self) -> float:
+        try:
+            return max(0.0, float(self.fade.get().replace(",", ".")))
+        except ValueError:
+            return 40.0
+
     def _track_index(self, key):
         v = self.track[key].get()
         if v == AUTO:
@@ -180,7 +189,7 @@ class App(tk.Tk):
         report = (os.path.splitext(out)[0] + "_report.json") if out else None
         opt = Options(ref_track=self._track_index("ref"), src_track=self._track_index("src"),
                       speed=self.speed.get().strip() or "auto", pitch=self.pitch.get(),
-                      fill=self.fill.get(),
+                      fill=self.fill.get(), fade_ms=self._fade_ms(),
                       codec=None if self.codec.get() == "auto" else self.codec.get(),
                       bitrate=self.bitrate.get().strip() or None,
                       language=self.lang.get().strip() or "por",

@@ -35,26 +35,33 @@ def _copy(w: WavWriter, src: np.ndarray, a: int, n: int, fade_in: int, fade_out:
 
 
 def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
-           fill: WavInfo | None = None, fade_ms: float = 4.0):
-    """pieces: sorted, non-overlapping {'start','end' (ref s), 'offset' (s)} on the ref timeline."""
+           fill: WavInfo | None = None, fade_ms: float = 40.0, splice_ms: float = 4.0):
+    """pieces: sorted, non-overlapping {'start','end' (ref s), 'offset' (s)} on the ref timeline.
+
+    Edges next to a gap fade over fade_ms (inside the piece, so no extra source is used);
+    pieces that butt against each other only get a splice_ms click guard."""
     sr = inter.sr
     src = inter.memmap()
     ref = fill.memmap() if fill is not None else None
     F = max(1, int(round(fade_ms * 1e-3 * sr)))
+    S = max(1, int(round(splice_ms * 1e-3 * sr)))
     w = WavWriter(out_wav, n_out, inter.channels, sr, inter.mask)
     cur = 0
-    for p in pieces:
+    for k, p in enumerate(pieces):
         n0 = min(max(int(round(p["start"] * sr)), cur), n_out)
         n1 = min(max(int(round(p["end"] * sr)), n0), n_out)
         if n0 > cur:
-            _gap(w, ref, cur, n0 - cur, F, n_out)
+            _gap(w, ref, cur, n0 - cur, S, n_out)
         shift = int(round(p["offset"] * sr))
         n = n1 - n0
         if n > 0:
-            _copy(w, src, n0 - shift, n, F if n0 > 0 else 0, F if n1 < n_out else 0)
+            nxt = int(round(pieces[k + 1]["start"] * sr)) if k + 1 < len(pieces) else n_out
+            fi = 0 if n0 == 0 else (F if n0 > cur else S)
+            fo = 0 if n1 >= n_out else (F if nxt > n1 else S)
+            _copy(w, src, n0 - shift, n, min(fi, n // 2), min(fo, n // 2))
         cur = n1
     if cur < n_out:
-        _gap(w, ref, cur, n_out - cur, F, n_out)
+        _gap(w, ref, cur, n_out - cur, S, n_out)
     w.close()
 
 

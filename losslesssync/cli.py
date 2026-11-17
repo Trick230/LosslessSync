@@ -19,7 +19,7 @@ def cmd_sync(args):
     opt = Options(
         ref_track=args.ref_track, src_track=args.src_track,
         ref_langs=tuple(x.strip() for x in args.ref_lang.split(",") if x.strip()),
-        speed=args.speed, pitch=args.pitch, fill=args.fill, codec=args.codec,
+        speed=args.speed, pitch=args.pitch, fill=args.fill, fade_ms=args.fade_ms, codec=args.codec,
         bitrate=args.bitrate, language=args.language, mux=args.mux, report=args.report,
         keep_temp=args.keep_temp, tmp_dir=args.tmp, analyze_only=args.analyze_only)
     if not args.output and not args.analyze_only:
@@ -50,6 +50,8 @@ def main(argv=None):
                    help="resample = undo PAL speed-up incl. pitch; tempo = keep pitch")
     s.add_argument("--fill", default="silence", choices=["silence", "ref"],
                    help="what to put where the source has no matching content")
+    s.add_argument("--fade-ms", type=float, default=40.0,
+                   help="fade length (ms) where the track meets a gap (default 40)")
     s.add_argument("--codec", choices=list(media.CODECS), help="override output codec")
     s.add_argument("--bitrate", help="bitrate for lossy codecs, e.g. 448k")
     s.add_argument("--language", default="por", help="language tag of the output track")
