@@ -114,8 +114,9 @@ Or `python -m losslesssync gui`.
 | `--src-track N` | auto | Source audio track (`a:N`) |
 | `--speed` | `auto` | `auto`, `pal`, `1`, or an exact ratio such as `1001/960` |
 | `--pitch` | `auto` | `auto`, `resample`, `tempo` or `keep` (cut on the resampled source, render it time-stretched so the original PAL pitch is kept on the film timing) |
-| `--keep-engine` | `wsola` | stretcher for `--pitch keep`: `wsola` (built in; no phase-vocoder smearing, timing error bounded by `--wsola-tol-ms`) or `rubberband` (R3) |
-| `--wsola-tol-ms` | `5` | WSOLA search tolerance; smaller keeps events tighter in time (2 ms: 95% of windows within 1 ms on a real episode), larger gives smoother splices |
+| `--keep-engine` | `wsola` | stretcher for `--pitch keep`: `wsola` (built in; no phase-vocoder smearing, timing error bounded by `--wsola-max-ms`) or `rubberband` (R3) |
+| `--wsola-tol-ms` | `5` | WSOLA search tolerance: events stay within this of their exact place |
+| `--wsola-max-ms` | `10` | WSOLA widens its search up to this only for a clearly better splice (fewer artefacts; set it equal to `--wsola-tol-ms` for a hard bound) |
 | `--fill` | `silence` | What fills gaps: `silence` or `ref` |
 | `--fade-ms` | `300` | Fade at the edges of gaps |
 | `--fade-opening` | off | Also fade into the opening titles |
@@ -175,6 +176,11 @@ python tests/make_synth.py test_out/pal --variant pal
 losslesssync sync --ref test_out/pal/ref.mka --src test_out/pal/tv.ts -o test_out/pal/out.flac --report test_out/pal/report.json
 python tests/check.py test_out/pal
 ```
+
+`tests/stretch_quality.py SOURCE [engine ...]` scores the artefacts of the pitch-keeping
+stretchers (`wsola[:tol[:frame_ms[:key=value...]]]`, `rubberband`, `atempo`): four
+excerpts are stretched and stretched back, and the round trip is compared with the
+original on a log-mel spectrogram, forgiving +-10 ms of displacement. Lower is better.
 
 ## Limitations
 

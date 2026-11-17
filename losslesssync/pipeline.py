@@ -27,7 +27,8 @@ class Options:
     speed: str = "auto"          # auto | pal | pal24 | ntsc | 1 | <float> | <a/b>
     pitch: str = "auto"          # auto | resample | tempo | keep
     keep_engine: str = "wsola"   # stretcher for pitch=keep: wsola | rubberband
-    wsola_tol_ms: float = 5.0    # WSOLA search tolerance (bounds the timing error)
+    wsola_tol_ms: float = 5.0    # WSOLA search tolerance (bounds the timing error)...
+    wsola_max_ms: float = 10.0   # ...widened up to this for a clearly better splice
     fill: str = "silence"        # silence | ref
     fade_ms: float = 300.0        # fade at edges next to a gap
     fade_opening: bool = False   # also fade into the opening titles
@@ -317,10 +318,11 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt) -> s
     shift the pieces by the stretcher's latency, measured against the resampled source."""
     keep_wav = os.path.join(tmp, "keep.wav")
     if opt.keep_engine == "wsola":
-        log(f"time-stretching source keeping its pitch (WSOLA, +-{opt.wsola_tol_ms:g} ms)...")
+        log(f"time-stretching source keeping its pitch (WSOLA, +-{opt.wsola_tol_ms:g} ms, "
+            f"up to +-{opt.wsola_max_ms:g} ms)...")
         raw_wav = os.path.join(tmp, "raw.wav")
         media.decode_to_wav(src_path, src_st, raw_wav, src_st.channels, src_st.sample_rate)
-        engine = wsola.stretch(raw_wav, keep_wav, k, opt.wsola_tol_ms)
+        engine = wsola.stretch(raw_wav, keep_wav, k, opt.wsola_tol_ms, opt.wsola_max_ms)
         if not opt.keep_temp:
             os.remove(raw_wav)
         keep16 = media.decode_mono(keep_wav, media.audio_streams(keep_wav)[0], ANA_SR)

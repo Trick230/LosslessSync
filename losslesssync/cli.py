@@ -20,7 +20,7 @@ def make_options(args, **extra) -> Options:
         ref_track=args.ref_track, src_track=args.src_track,
         ref_langs=tuple(x.strip() for x in args.ref_lang.split(",") if x.strip()),
         speed=args.speed, pitch=args.pitch, keep_engine=args.keep_engine,
-        wsola_tol_ms=args.wsola_tol_ms, fill=args.fill, fade_ms=args.fade_ms,
+        wsola_tol_ms=args.wsola_tol_ms, wsola_max_ms=args.wsola_max_ms, fill=args.fill, fade_ms=args.fade_ms,
         fade_opening=args.fade_opening, codec=args.codec, bitrate=args.bitrate,
         language=args.language, tmp_dir=args.tmp, **extra)
 
@@ -58,6 +58,10 @@ def add_common(s):
                         "smearing, timing error bounded by --wsola-tol-ms) or rubberband (R3)")
     s.add_argument("--wsola-tol-ms", type=float, default=5.0,
                    help="WSOLA search tolerance in ms (default 5)")
+    s.add_argument("--wsola-max-ms", type=float, default=10.0,
+                   help="WSOLA may widen its search up to this (ms) when that gives a "
+                        "clearly better splice (default 10; set equal to --wsola-tol-ms "
+                        "for a hard bound)")
     s.add_argument("--fill", default="silence", choices=["silence", "ref"],
                    help="what to put where the source has no matching content")
     s.add_argument("--fade-ms", type=float, default=300.0,
