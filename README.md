@@ -113,7 +113,9 @@ Or `python -m losslesssync gui`.
 | `--ref-lang` | `eng,jpn` | Preferred reference languages |
 | `--src-track N` | auto | Source audio track (`a:N`) |
 | `--speed` | `auto` | `auto`, `pal`, `1`, or an exact ratio such as `1001/960` |
-| `--pitch` | `auto` | `auto`, `resample`, `tempo` or `keep` (cut on the resampled source, render it stretched with Rubber Band R3 so the original PAL pitch is kept on the film timing) |
+| `--pitch` | `auto` | `auto`, `resample`, `tempo` or `keep` (cut on the resampled source, render it time-stretched so the original PAL pitch is kept on the film timing) |
+| `--keep-engine` | `wsola` | stretcher for `--pitch keep`: `wsola` (built in; no phase-vocoder smearing, timing error bounded by `--wsola-tol-ms`) or `rubberband` (R3) |
+| `--wsola-tol-ms` | `5` | WSOLA search tolerance; smaller keeps events tighter in time (2 ms: 95% of windows within 1 ms on a real episode), larger gives smoother splices |
 | `--fill` | `silence` | What fills gaps: `silence` or `ref` |
 | `--fade-ms` | `300` | Fade at the edges of gaps |
 | `--fade-opening` | off | Also fade into the opening titles |

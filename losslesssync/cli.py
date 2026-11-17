@@ -19,7 +19,8 @@ def make_options(args, **extra) -> Options:
     return Options(
         ref_track=args.ref_track, src_track=args.src_track,
         ref_langs=tuple(x.strip() for x in args.ref_lang.split(",") if x.strip()),
-        speed=args.speed, pitch=args.pitch, fill=args.fill, fade_ms=args.fade_ms,
+        speed=args.speed, pitch=args.pitch, keep_engine=args.keep_engine,
+        wsola_tol_ms=args.wsola_tol_ms, fill=args.fill, fade_ms=args.fade_ms,
         fade_opening=args.fade_opening, codec=args.codec, bitrate=args.bitrate,
         language=args.language, tmp_dir=args.tmp, **extra)
 
@@ -50,8 +51,13 @@ def add_common(s):
                    help="auto | pal (25 from 23.976) | pal24 | ntsc | 1 | ratio like 1001/960")
     s.add_argument("--pitch", default="auto", choices=["auto", "resample", "tempo", "keep"],
                    help="resample = undo PAL speed-up incl. pitch; tempo = keep pitch; "
-                        "keep = cut on the resampled source, render it stretched with "
-                        "Rubber Band R3 keeping the original (PAL) pitch")
+                        "keep = cut on the resampled source, render it time-stretched "
+                        "keeping the original (PAL) pitch")
+    s.add_argument("--keep-engine", default="wsola", choices=["wsola", "rubberband"],
+                   help="stretcher for --pitch keep: wsola (default, no phase-vocoder "
+                        "smearing, timing error bounded by --wsola-tol-ms) or rubberband (R3)")
+    s.add_argument("--wsola-tol-ms", type=float, default=5.0,
+                   help="WSOLA search tolerance in ms (default 5)")
     s.add_argument("--fill", default="silence", choices=["silence", "ref"],
                    help="what to put where the source has no matching content")
     s.add_argument("--fade-ms", type=float, default=300.0,

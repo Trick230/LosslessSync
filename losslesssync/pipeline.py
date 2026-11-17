@@ -11,7 +11,7 @@ from fractions import Fraction
 
 import numpy as np
 
-from . import align, media
+from . import align, media, wsola
 from .features import ANA_SR, features
 from .render import render
 from .wavio import read_info
@@ -26,6 +26,8 @@ class Options:
     ref_langs: tuple[str, ...] = ("eng", "jpn")
     speed: str = "auto"          # auto | pal | pal24 | ntsc | 1 | <float> | <a/b>
     pitch: str = "auto"          # auto | resample | tempo | keep
+    keep_engine: str = "wsola"   # stretcher for pitch=keep: wsola | rubberband
+    wsola_tol_ms: float = 5.0    # WSOLA search tolerance (bounds the timing error)
     fill: str = "silence"        # silence | ref
     fade_ms: float = 300.0        # fade at edges next to a gap
     fade_opening: bool = False   # also fade into the opening titles
@@ -256,7 +258,7 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
 
     if not opt.analyze_only and out_path:
         if opt.pitch == "keep" and abs(k - 1) > 1e-4:
-            inter_wav = keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report)
+            inter_wav = keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt)
         info = read_info(inter_wav)
         n_out = int(round(ref_dur * info.sr))
         fill = None
@@ -299,12 +301,22 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     return report
 
 
-def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report) -> str:
-    """Stretch the source to the film timing keeping its pitch (Rubber Band R3) and shift
-    the pieces by the stretcher's latency, measured against the resampled source."""
-    log("time-stretching source keeping its pitch (Rubber Band R3)...")
+def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt) -> str:
+    """Stretch the source to the film timing keeping its pitch (WSOLA or Rubber Band R3) and
+    shift the pieces by the stretcher's latency, measured against the resampled source."""
     keep_wav = os.path.join(tmp, "keep.wav")
-    keep16 = media.make_intermediate(src_path, src_st, k, "keep", keep_wav, ANA_SR)
+    if opt.keep_engine == "wsola":
+        log(f"time-stretching source keeping its pitch (WSOLA, +-{opt.wsola_tol_ms:g} ms)...")
+        raw_wav = os.path.join(tmp, "raw.wav")
+        media.decode_to_wav(src_path, src_st, raw_wav, src_st.channels, src_st.sample_rate)
+        engine = wsola.stretch(raw_wav, keep_wav, k, opt.wsola_tol_ms)
+        if not opt.keep_temp:
+            os.remove(raw_wav)
+        keep16 = media.decode_mono(keep_wav, media.audio_streams(keep_wav)[0], ANA_SR)
+    else:
+        log("time-stretching source keeping its pitch (Rubber Band R3)...")
+        engine = {"engine": "rubberband R3"}
+        keep16 = media.make_intermediate(src_path, src_st, k, "keep", keep_wav, ANA_SR)
     dur = min(len(inter16), len(keep16)) / ANA_SR
     ts = np.arange(10.0, dur - 16.0, 5.0)
     res = align.pmap(lambda t: align.fine_measure(inter16, keep16, t, 0.0, 6.0, max_lag=0.2), ts)
@@ -318,7 +330,7 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report) -> str:
     log(f"  stretch latency {lat * 1000:+.3f} ms over {len(off)} windows: "
         f"median deviation {np.median(dev):.3f} ms, p95 {np.percentile(dev, 95):.3f} ms, "
         f"drift {slope * 1e6:+.2f} ppm")
-    report["keep_pitch"] = {"engine": "rubberband R3", "latency_ms": lat * 1000,
+    report["keep_pitch"] = {**engine, "latency_ms": lat * 1000,
                             "windows": len(off), "median_dev_ms": float(np.median(dev)),
                             "p95_dev_ms": float(np.percentile(dev, 95)), "drift_ppm": slope * 1e6}
     report["stretch_mode"] = "keep"
