@@ -28,6 +28,7 @@ class Options:
     pitch: str = "auto"          # auto | resample | tempo
     fill: str = "silence"        # silence | ref
     fade_ms: float = 300.0        # fade at edges next to a gap
+    fade_opening: bool = False   # also fade into the opening titles
     codec: str | None = None
     bitrate: str | None = None
     language: str = "por"
@@ -201,13 +202,17 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     del Rb, Sb
     segs = align.refine_edges(segs, inter16, ref_dur)
     pieces = [{"start": s.ref_start, "end": s.ref_end, "offset": s.offset} for s in segs]
+    opening = None if opt.fade_opening else align.find_opening(segs, ref16, inter16, ref_dur)
+    if opening is not None:
+        pieces[opening]["fade_in"] = False
+        log(f"  opening titles at {fmt_t(segs[opening].ref_start)}: no fade-in")
 
     report = {
         "reference": ref_path, "reference_track": ref_st.aidx, "source": src_path,
         "source_track": src_st.aidx, "speed": k, "speed_fraction": str(Fraction(k).limit_denominator(100000)),
         "speed_scores": speed_scores, "stretch_mode": mode, "pitch": pitch_info,
         "reference_duration": ref_dur, "reference_audio_delay_s": ref_st.start_time,
-        "segments": [], "gaps": [],
+        "segments": [], "gaps": [], "opening_segment": opening,
     }
     covered = 0.0
     prev = 0.0

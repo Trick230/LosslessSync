@@ -747,6 +747,60 @@ def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float) -> list
     return [s for s in segs if s.ref_end - s.ref_start > 0.1]
 
 
+def _spec_similarity(ref16, src16, a: float, b: float, offset: float, win: float = 2.0):
+    """Per-window correlation of log spectra between ref [a, b) and src at ref - offset."""
+    sr, n, h = ANA_SR, 1024, 512
+    hann = np.hanning(n)
+
+    def spec(x, t):
+        i = int(round(t * sr))
+        seg = x[max(i, 0):i + int(win * sr)]
+        if i < 0 or len(seg) < n:
+            return None
+        fr = np.lib.stride_tricks.sliding_window_view(seg, n)[::h] * hann
+        return np.log(np.abs(np.fft.rfft(fr)) + 1e-4)
+
+    out = []
+    for t in np.arange(a, b - win, win):
+        R, S = spec(ref16, t), spec(src16, t - offset)
+        if R is None or S is None:
+            continue
+        m = min(len(R), len(S))
+        R = R[:m].ravel() - R[:m].mean()
+        S = S[:m].ravel() - S[:m].mean()
+        d = np.linalg.norm(R) * np.linalg.norm(S)
+        if d > 0:
+            out.append(float(R @ S / d))
+    return np.array(out)
+
+
+def find_opening(segs: list[Segment], ref16, src16, ref_dur: float,
+                 min_len: float = 20.0, max_len: float = 120.0, min_sim: float = 0.7,
+                 margin: float = 0.1) -> int | None:
+    """Index of the segment holding the opening titles, or None.
+
+    The opening is music only, so both languages carry the same audio all through it: its
+    worst windows still match closely, unlike dialogue scenes. It follows a gap, lies in
+    the first 40% of the episode and lasts 20-120 s (the end credits look alike but are
+    late)."""
+    p10 = []
+    for s in segs:
+        sim = _spec_similarity(ref16, src16, s.ref_start, s.ref_end, s.offset)
+        p10.append(float(np.percentile(sim, 10)) if len(sim) >= 5 else -1.0)
+    best = None
+    for i, s in enumerate(segs):
+        gap_before = s.ref_start - (segs[i - 1].ref_end if i else 0.0)
+        if not (gap_before > 0.5 and s.ref_start < 0.4 * ref_dur
+                and min_len <= s.ref_end - s.ref_start <= max_len and p10[i] >= min_sim):
+            continue
+        others = [v for j, v in enumerate(p10) if j != i and v > -1.0]
+        if others and p10[i] < np.median(others) + margin:
+            continue
+        if best is None or p10[i] > p10[best]:
+            best = i
+    return best
+
+
 # ---------------------------------------------------------------- pitch mode
 
 def detect_pitch_mode(ref16: np.ndarray, src16: np.ndarray, anchors: list[Anchor], k: float,

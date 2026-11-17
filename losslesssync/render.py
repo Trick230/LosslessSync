@@ -56,7 +56,7 @@ def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
         n = n1 - n0
         if n > 0:
             nxt = int(round(pieces[k + 1]["start"] * sr)) if k + 1 < len(pieces) else n_out
-            fi = 0 if n0 == 0 else (F if n0 > cur else S)
+            fi = 0 if n0 == 0 else (F if n0 > cur and p.get("fade_in", True) else S)
             fo = 0 if n1 >= n_out else (F if nxt > n1 else S)
             _copy(w, src, n0 - shift, n, min(fi, n // 2), min(fo, n // 2))
         cur = n1
