@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from scipy import fft as sfft
+from scipy.signal import fftconvolve
 from scipy.ndimage import uniform_filter1d
 
 from .features import ANA_SR, features, frame_rms_db, pool
@@ -12,6 +13,7 @@ from .features import ANA_SR, features, frame_rms_db, pool
 HOP = 0.01          # coarse feature hop (100 fps)
 POOL = 4            # global search runs at 25 fps
 NCC_REG = 0.05      # per-element regulariser: penalises near-silent windows
+DROPOUT_MAX_JUMP = 1.5  # longest lost-audio stretch tracked as a signal dropout (s)
 
 SPEED_CANDIDATES = {
     "1": 1.0,
@@ -638,9 +640,15 @@ def place_segments(segs: list[Segment], R: np.ndarray, S: np.ndarray, ref_dur: f
             sA = sim(A, f0, f1, phase) if A is not None else None
             sB = sim(Bs, f0, f1, phase) if Bs is not None else None
             eg = None
+            margin_prior = 4.0
             if A is not None and Bs is not None:
                 eg = int(round(max(0.0, Bs.offset - A.offset) * fps))
-            c1, c2 = best_cut(sA, sB, tau=tau_for(pair, phase), expected_gap=eg)
+                # a small forward jump is lost audio (signal dropout): the source runs on
+                # across it, so the gap is exactly the jump, wherever it falls
+                if 0.0 < Bs.offset - A.offset <= DROPOUT_MAX_JUMP:
+                    margin_prior = np.inf
+            c1, c2 = best_cut(sA, sB, tau=tau_for(pair, phase), expected_gap=eg,
+                              prior_margin=margin_prior)
             bounds.append((f0 + c1, f0 + c2))
         for i, s in enumerate(segs):
             s.ref_start = bounds[i][1] * HOP
@@ -696,7 +704,7 @@ def _snap(src16, s_t: float, kind: str, search: float = 0.08, ctx: float = 0.03,
 
 
 def _splice_point(src16, s_t: float, search: float = 0.5, smooth: float = 0.01,
-                  drop_db: float = 20.0):
+                  drop_db: float = 20.0, floor_db: float = -50.0):
     """Source time of the deepest level dip within +-search of s_t (a TV splice inside
     continuous source), or None when nothing dips drop_db below the window's median."""
     hop = 32
@@ -706,12 +714,51 @@ def _splice_point(src16, s_t: float, search: float = 0.5, smooth: float = 0.01,
         return None
     e = uniform_filter1d(e, max(1, int(round(smooth / step))), mode="nearest")
     i = int(np.argmin(e))
-    if e[i] > np.median(e) - drop_db:
+    if e[i] > np.median(e) - drop_db or e[i] > floor_db:
         return None
     return s_t - search + i * step
 
 
-def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float) -> list[Segment]:
+def _locate_skip(ref16, src16, A: Segment, B: Segment, span: float = 1.5):
+    """Place a lost-audio gap (B.offset - A.offset long, source continuous across it) at
+    1 ms: onset flux of the ref against the source at A's offset before the cut and at
+    B's offset after it. Works without phase coherence (time-stretched sources)."""
+    sr = ANA_SR
+    g = B.offset - A.offset
+    lo = max(A.ref_start + 0.1, A.ref_end - span)
+    hi = min(B.ref_end - 0.1, B.ref_start + span)
+    if hi - lo < g + 0.2:
+        return
+    n = int((hi - lo) * sr)
+    i_r = int(round(lo * sr))
+    i_a = int(round((lo - A.offset) * sr))
+    i_b = int(round((lo - B.offset) * sr))
+    if min(i_r, i_a, i_b) < 0 or max(i_r, i_a, i_b) + n > min(len(ref16), len(src16)):
+        return
+    # with phase coherence the placement cut (coherence similarity) is already exact
+    f0, f1 = int(round(lo / HOP)), int(round(hi / HOP))
+    h = (f1 - f0) // 2
+    coh = np.concatenate([coherence_sim(ref16, src16, A.offset, f0, f0 + h),
+                          coherence_sim(ref16, src16, B.offset, f1 - h, f1)])
+    if np.median(coh) >= 0.15:
+        return
+    Fr = onset_flux(ref16[i_r:i_r + n])
+    pa = (Fr * onset_flux(src16[i_a:i_a + n])).sum(0)
+    pb = (Fr * onset_flux(src16[i_b:i_b + n])).sum(0)
+    PA = np.concatenate([[0.0], np.cumsum(pa)])
+    PB = np.concatenate([[0.0], np.cumsum(pb)])
+    gf = int(round(g * sr / FLUX_HOP))
+    c = np.arange(0, len(pa) - gf + 1)
+    if len(c) == 0:
+        return
+    score = PA[c] + PB[-1] - PB[c + gf]
+    j = int(c[np.argmax(score)])
+    t = lo + (j * FLUX_HOP + 128) / sr   # frame centre (n_fft 256)
+    A.ref_end, B.ref_start = t, t + g
+
+
+def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float,
+                 ref16: np.ndarray | None = None) -> list[Segment]:
     """Move edges that border a gap onto the splice point visible in the source level.
 
     place_segments works on 10 ms frames with smoothed similarity; this pins the cut to the
@@ -719,8 +766,13 @@ def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float) -> list
     re-imposes that no source sample is used twice.
     """
     segs = sorted(segs, key=lambda s: s.ref_start)
-    split = set()
+    drops = dropout_gaps(segs, ref16) if ref16 is not None else set()
+    split = {("end", i) for i in drops} | {("start", i + 1) for i in drops}
+    for i in sorted(drops):
+        _locate_skip(ref16, src16, segs[i], segs[i + 1])
     for i, (a, b) in enumerate(zip(segs, segs[1:])):
+        if i in drops:
+            continue
         # Source runs on across the cut: the TV edit is somewhere in it, and the ref gap
         # does not say where, so look wider for the splice and cut both edges there.
         s_a, s_b = a.ref_end - a.offset, b.ref_start - b.offset
@@ -799,6 +851,193 @@ def find_opening(segs: list[Segment], ref16, src16, ref_dur: float,
         if best is None or p10[i] > p10[best]:
             best = i
     return best
+
+
+# ---------------------------------------------------------------- signal dropouts
+
+def track_offsets(ref16, src16, Rb, Sb, base_off: float, t0: float, t1: float,
+                  win: float = 1.5, step: float = 0.25, max_jump: float = 1.5,
+                  min_ncc: float = 0.25, min_ratio: float = 1.1) -> list[tuple]:
+    """Offset measured in short sliding ref windows over [t0, t1), searching +-max_jump
+    around base_off: (window centre, offset, confidence, method) where it is reliable."""
+    fps = 1.0 / HOP
+    T = int(round(win * fps))
+    L = int(round(max_jump * fps))
+    excl = 5
+    out = []
+    t = max(0.0, t0)
+    while t + win <= t1:
+        f = int(round(t * fps))
+        g = f - int(round(base_off * fps))
+        if f + T > len(Rb) or g - L < 0 or g + T + L > len(Sb):
+            t += step
+            continue
+        C = Rb[f:f + T]
+        Sseg = Sb[g - L:g + T + L]
+        num = fftconvolve(Sseg, C[::-1], mode="valid", axes=0).sum(1)
+        e = np.concatenate([[0.0], np.cumsum((Sseg * Sseg).sum(1))])
+        es = e[T:] - e[:-T]
+        B = C.shape[1]
+        ncc = num / (np.sqrt(es + NCC_REG * T * B) * (np.sqrt(float((C * C).sum())) + 1e-9))
+        j = int(np.argmax(ncc))
+        v2 = ncc.copy()
+        v2[max(0, j - excl):j + excl + 1] = -np.inf
+        second = float(v2.max()) if np.isfinite(v2).any() else 0.0
+        if ncc[j] >= min_ncc and ncc[j] >= min_ratio * max(second, 1e-3):
+            off = base_off + (L - (j + parabolic(ncc, j))) / fps
+            res = fine_measure(ref16, src16, t, off, win, max_lag=0.03)
+            if res is not None:
+                out.append((t + win / 2, res[0], res[1], res[2]))
+        t += step
+    return out
+
+
+def offset_runs(obs: list[tuple], tol: float = 0.004, min_n: int = 4) -> list[list[tuple]]:
+    """Split time-ordered offset measurements into runs of one constant offset.
+
+    A new run starts only once min_n consecutive measurements agree on a new value, so a
+    single bad window (straddling a dropout, weak passage) cannot start or end a run."""
+    runs: list[list[tuple]] = []
+    cur: list[tuple] = []
+    pend: list[tuple] = []
+
+    def level(r):
+        return float(np.median([o[1] for o in r[-8:]]))
+
+    for o in obs:
+        if cur and abs(o[1] - level(cur)) < tol:
+            cur.append(o)
+            pend = []
+            continue
+        if pend and abs(o[1] - level(pend)) >= tol:
+            pend = []
+        pend.append(o)
+        if len(pend) >= min_n:
+            if cur:
+                runs.append(cur)
+            cur, pend = pend, []
+    if cur:
+        runs.append(cur)
+    runs = [r for r in runs if len(r) >= min_n]
+    merged: list[list[tuple]] = []
+    for r in runs:
+        if merged and abs(level(merged[-1]) - level(r)) < tol:
+            merged[-1] = merged[-1] + r
+        else:
+            merged.append(r)
+    return merged
+
+
+def _monotonic_runs(runs: list[list[tuple]], max_jump: float,
+                    tol: float = 0.004) -> list[list[tuple]]:
+    """Keep the runs that a recording with dropouts can produce: lost audio only ever moves
+    the offset forward (by at most max_jump), so a run that steps back, or one that sits
+    between two runs at the same offset, is a false match (repeated music, weak passage).
+    The shorter run of each offending pair is dropped; equal neighbours are merged."""
+    runs = [list(r) for r in runs]
+
+    def level(r):
+        return float(np.median([o[1] for o in r]))
+
+    while True:
+        merged: list[list[tuple]] = []
+        for r in runs:
+            if merged and abs(level(merged[-1]) - level(r)) < tol:
+                merged[-1] = merged[-1] + r
+            else:
+                merged.append(r)
+        runs = merged
+        bad = next((i for i in range(len(runs) - 1)
+                    if not 0.0 < level(runs[i + 1]) - level(runs[i]) <= max_jump), None)
+        if bad is None:
+            return runs
+        if bad > 0 and abs(level(runs[bad + 1]) - level(runs[bad - 1])) < tol:
+            del runs[bad]   # a detour between two runs at one offset
+        else:
+            del runs[bad if len(runs[bad]) < len(runs[bad + 1]) else bad + 1]
+
+
+def split_on_dropouts(segs: list[Segment], ref16, src16, Rb, Sb, k: float, chunk_s: float,
+                      ref_dur: float, max_jump: float = DROPOUT_MAX_JUMP, progress=None) -> list[Segment]:
+    """Re-segment on a fine time grid so that signal dropouts in the recording (lost audio
+    shifts everything after it a little) become their own cuts, even several in a row.
+
+    Each segment is tracked from the end of its predecessor to the start of its successor,
+    so short pieces between dropouts that the coarse 6 s anchors could not confirm are
+    recovered."""
+    segs = sorted(segs, key=lambda s: s.core(k, chunk_s)[0])
+    found: list[Segment] = []
+    for i, s in enumerate(segs):
+        if progress:
+            progress(i / max(1, len(segs)))
+        lo = segs[i - 1].core(k, chunk_s)[1] if i > 0 else 0.0
+        hi = segs[i + 1].core(k, chunk_s)[0] if i + 1 < len(segs) else ref_dur
+        obs = track_offsets(ref16, src16, Rb, Sb, s.offset, lo, hi, max_jump=max_jump)
+        runs = _monotonic_runs(offset_runs(obs), max_jump)
+        if not runs:
+            found.append(s)
+            continue
+        for r in runs:
+            anchors = [Anchor(src_raw=(c - chunk_s / 2 - o) / k, ref=c - chunk_s / 2,
+                              ncc=1.0, ratio=10.0) for c, o, _, _ in r]
+            n = Segment(anchors=anchors, fine=[(c - o, o, cf, m) for c, o, cf, m in r])
+            summarize_fine(n)
+            found.append(n)
+    # the same stretch can be found from two neighbouring searches: keep the better one
+    found.sort(key=lambda s: -len(s.fine))
+    keep: list[Segment] = []
+    for s in found:
+        a0, a1 = s.core(k, chunk_s)
+        if not any(min(a1, b.core(k, chunk_s)[1]) - max(a0, b.core(k, chunk_s)[0]) > 0.5
+                   for b in keep):
+            keep.append(s)
+    return sorted(keep, key=lambda s: s.core(k, chunk_s)[0])
+
+
+def dropout_gaps(segs: list[Segment], ref16, max_len: float = DROPOUT_MAX_JUMP + 0.05,
+                 active_db: float = -45.0) -> set[int]:
+    """Indices i whose gap to segs[i + 1] is a signal dropout rather than an edit: the
+    source runs on across it (the lost audio just is not there) and the reference has
+    programme in it (edits on the Blu-ray side fall in black/silence)."""
+    out = set()
+    for i, (a, b) in enumerate(zip(segs, segs[1:])):
+        gap = b.ref_start - a.ref_end
+        s_a, s_b = a.ref_end - a.offset, b.ref_start - b.offset
+        if not (0.0 < gap <= max_len and abs(s_b - s_a) < 0.05):
+            continue
+        m = 0.5 * (a.ref_end + b.ref_start)
+        h = max(0.5 * gap, 0.01)
+        e = _energy_db(ref16, m - h, m + h, hop=32, win=160)
+        if e is not None and len(e) and float(np.median(e)) > active_db:
+            out.add(i)
+    return out
+
+
+def muted_spans(segs: list[Segment], ref16, src16, min_len: float = 0.02,
+                silent_db: float = -70.0, active_db: float = -45.0,
+                edge: float = 0.25) -> list[tuple]:
+    """Ref spans where the recording kept its timing but the sound dropped to digital
+    silence while the reference has programme (muted dropouts)."""
+    hop = 32
+    step = hop / ANA_SR
+    out = []
+    for s in segs:
+        e = _energy_db(src16, s.ref_start - s.offset, s.ref_end - s.offset, hop, hop)
+        if e is None:
+            continue
+        q = np.concatenate([[False], e < silent_db, [False]])
+        d = np.diff(q.astype(np.int8))
+        for a, b in zip(np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]):
+            if (b - a) * step < min_len:
+                continue
+            r0 = s.ref_start + a * step
+            r1 = s.ref_start + b * step
+            if r0 - s.ref_start < edge or s.ref_end - r1 < edge:
+                continue   # silence at a cut belongs to the edit, not to a dropout
+            er = _energy_db(ref16, r0, r1, hop=160, win=160)
+            if er is not None and len(er) and float(np.median(er)) > active_db:
+                out.append((r0, r1))
+    return out
 
 
 # ---------------------------------------------------------------- pitch mode

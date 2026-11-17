@@ -43,8 +43,10 @@ def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
     sr = inter.sr
     src = inter.memmap()
     ref = fill.memmap() if fill is not None else None
-    F = max(1, int(round(fade_ms * 1e-3 * sr)))
-    S = max(1, int(round(splice_ms * 1e-3 * sr)))
+    def ms(v):
+        return max(1, int(round(v * 1e-3 * sr)))
+
+    F, S = ms(fade_ms), ms(splice_ms)
     w = WavWriter(out_wav, n_out, inter.channels, sr, inter.mask)
     cur = 0
     for k, p in enumerate(pieces):
@@ -56,8 +58,10 @@ def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
         n = n1 - n0
         if n > 0:
             nxt = int(round(pieces[k + 1]["start"] * sr)) if k + 1 < len(pieces) else n_out
-            fi = 0 if n0 == 0 else (F if n0 > cur and p.get("fade_in", True) else S)
-            fo = 0 if n1 >= n_out else (F if nxt > n1 else S)
+            Fi = ms(p["fade_in_ms"]) if "fade_in_ms" in p else F
+            Fo = ms(p["fade_out_ms"]) if "fade_out_ms" in p else F
+            fi = 0 if n0 == 0 else (Fi if n0 > cur and p.get("fade_in", True) else S)
+            fo = 0 if n1 >= n_out else (Fo if nxt > n1 else S)
             _copy(w, src, n0 - shift, n, min(fi, n // 2), min(fo, n // 2))
         cur = n1
     if cur < n_out:

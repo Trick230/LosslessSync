@@ -29,6 +29,7 @@ class Options:
     fill: str = "silence"        # silence | ref
     fade_ms: float = 300.0        # fade at edges next to a gap
     fade_opening: bool = False   # also fade into the opening titles
+    dropout_fade_ms: float = 10.0  # fade at the edges of a signal dropout
     codec: str | None = None
     bitrate: str | None = None
     language: str = "por"
@@ -198,10 +199,28 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     log("placing cut points...")
     Rb = features(ref16, hp_s=0.15)
     Sb = features(inter16, hp_s=0.15)
+    segs = align.split_on_dropouts(segs, ref16, inter16, Rb, Sb, k, opt.chunk_s, ref_dur,
+                                   progress=lambda f: prog("dropouts", f))
+    segs = align.merge_equal(segs, k, opt.chunk_s)
     segs = align.place_segments(segs, Rb, Sb, ref_dur, opt.chunk_s, k, ref16, inter16)
     del Rb, Sb
-    segs = align.refine_edges(segs, inter16, ref_dur)
+    segs = align.refine_edges(segs, inter16, ref_dur, ref16)
     pieces = [{"start": s.ref_start, "end": s.ref_end, "offset": s.offset} for s in segs]
+    drops = sorted(align.dropout_gaps(segs, ref16))
+    for i in drops:
+        pieces[i]["fade_out_ms"] = opt.dropout_fade_ms
+        pieces[i + 1]["fade_in_ms"] = opt.dropout_fade_ms
+    dropouts = [{"start": segs[i].ref_end, "end": segs[i + 1].ref_start, "kind": "lost"}
+                for i in drops]
+    dropouts += [{"start": a, "end": b, "kind": "muted"}
+                 for a, b in align.muted_spans(segs, ref16, inter16)]
+    dropouts.sort(key=lambda d: d["start"])
+    if dropouts:
+        log(f"  {len(dropouts)} signal dropout(s) in the recording:")
+        for d in dropouts:
+            what = "audio lost" if d["kind"] == "lost" else "muted"
+            log(f"    {fmt_t(d['start'])} - {fmt_t(d['end'])}  "
+                f"({(d['end'] - d['start']) * 1000:.0f} ms, {what})")
     opening = None if opt.fade_opening else align.find_opening(segs, ref16, inter16, ref_dur)
     if opening is not None:
         pieces[opening]["fade_in"] = False
@@ -212,7 +231,7 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         "source_track": src_st.aidx, "speed": k, "speed_fraction": str(Fraction(k).limit_denominator(100000)),
         "speed_scores": speed_scores, "stretch_mode": mode, "pitch": pitch_info,
         "reference_duration": ref_dur, "reference_audio_delay_s": ref_st.start_time,
-        "segments": [], "gaps": [], "opening_segment": opening,
+        "segments": [], "gaps": [], "opening_segment": opening, "dropouts": dropouts,
     }
     covered = 0.0
     prev = 0.0

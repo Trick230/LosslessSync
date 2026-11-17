@@ -13,11 +13,11 @@ from .pipeline import Options, fmt_t, sync
 
 # weight of each pipeline stage in the overall progress bar (start fraction, span)
 STAGES = {"decode": (0.00, 0.10), "speed": (0.10, 0.05), "anchors": (0.15, 0.30),
-          "correct": (0.45, 0.10), "fine": (0.55, 0.15), "render": (0.70, 0.10),
+          "correct": (0.45, 0.10), "fine": (0.55, 0.08), "dropouts": (0.63, 0.07), "render": (0.70, 0.10),
           "verify": (0.80, 0.10), "encode": (0.90, 0.10), "done": (1.0, 0.0)}
 STAGE_NAMES = {"decode": "a descodificar", "speed": "a detetar velocidade",
                "anchors": "a procurar correspondências", "correct": "a corrigir velocidade",
-               "fine": "a afinar offsets", "render": "a montar", "verify": "a verificar",
+               "fine": "a afinar offsets", "dropouts": "a procurar falhas de sinal", "render": "a montar", "verify": "a verificar",
                "encode": "a codificar", "done": "concluído"}
 AUTO = "auto"
 

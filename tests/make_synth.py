@@ -1,6 +1,9 @@
 """Generate a synthetic Blu-ray reference + TV dub pair with known ground truth.
 
-usage: python tests/make_synth.py OUT_DIR [--variant pal|tempo|none] [--seed N]
+usage: python tests/make_synth.py OUT_DIR [--variant pal|tempo|none] [--seed N] [--dropouts]
+
+--dropouts adds TV signal failures: lost audio (time skips) and muted stretches, several
+in a row, on top of the usual edits.
 """
 from __future__ import annotations
 
@@ -106,6 +109,7 @@ def main():
     ap.add_argument("--variant", default="pal", choices=["pal", "tempo", "none"])
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--dur", type=float, default=420.0)
+    ap.add_argument("--dropouts", action="store_true")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     rng = np.random.default_rng(a.seed)
@@ -142,21 +146,47 @@ def main():
     pt_r = signal.lfilter(b, aa, 0.85 * me_r).astype(np.float32) + 0.8 * pt
     prog = np.stack([pt_l, pt_r], 1)
 
+    # TV signal failures (ref time, length s, kind): "skip" loses the audio and the time,
+    # "mute" keeps the time but the audio is gone
+    drops = []
+    if a.dropouts:
+        drops = [(40.0, 0.08, "skip"), (43.5, 0.3, "skip"), (46.0, 0.25, "mute"),
+                 (47.2, 0.04, "skip"), (52.0, 1.2, "skip"), (360.0, 0.5, "skip"),
+                 (362.0, 0.15, "mute")]
+    prog_tv = prog.copy()
+    for t, d, kind in drops:
+        if kind == "mute":
+            prog_tv[int(t * SR):int((t + d) * SR)] = 0
+
     # ideal result = programme with removed parts silenced
     edits = [(0, 150), (150, 250), (254, 400)]
     ideal = np.zeros_like(prog)
     for s, e in edits:
         ideal[int(s * SR):int(e * SR)] = prog[int(s * SR):int(e * SR)]
+    for t, d, kind in drops:
+        ideal[int(t * SR):int((t + d) * SR)] = 0
     write_wav(os.path.join(a.out, "ideal.wav"), ideal)
 
     r2 = np.random.default_rng(a.seed + 300)
     junk = lambda d: np.stack([note_track(r2, d, 2) + effects_track(r2, d, 2)] * 2, 1) * 0.8
-    tv = np.concatenate([junk(8), prog[:150 * SR], junk(75), prog[150 * SR:250 * SR],
-                         prog[254 * SR:400 * SR], junk(5)])
-    truth = {"segments": [{"ref_start": 0, "ref_end": 150, "offset_corrected": -8.0},
-                          {"ref_start": 150, "ref_end": 250, "offset_corrected": -83.0},
-                          {"ref_start": 254, "ref_end": 400, "offset_corrected": -79.0}],
-             "gaps": [[250, 254], [400, D]], "variant": a.variant}
+    lead = {0: 8.0, 150: 75.0, 254: 0.0}
+    parts, segments, pos = [], [], 0.0
+    for s, e in edits:
+        if lead[s]:
+            parts.append(junk(lead[s]))
+            pos += lead[s]
+        cur = s
+        for t, d, kind in sorted(drops) + [(e, 0.0, "end")]:
+            if kind not in ("skip", "end") or not (s <= t <= e):
+                continue
+            parts.append(prog_tv[int(cur * SR):int(t * SR)])
+            segments.append({"ref_start": cur, "ref_end": t, "offset_corrected": cur - pos})
+            pos += t - cur
+            cur = t + d
+    parts.append(junk(5))
+    tv = np.concatenate(parts)
+    truth = {"segments": segments, "gaps": [[250, 254], [400, D]], "variant": a.variant,
+             "dropouts": [{"ref_start": t, "ref_end": t + d, "kind": k} for t, d, k in drops]}
     tv_wav = os.path.join(a.out, "tv_pre.wav")
     if a.variant == "pal":
         tv = signal.resample_poly(tv, 960, 1001, axis=0).astype(np.float32)
