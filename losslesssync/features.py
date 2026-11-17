@@ -6,11 +6,20 @@ band. Correlation of these sequences is dominated by the common M&E content.
 """
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 from scipy import fft as sfft
 from scipy.ndimage import uniform_filter1d
 
 ANA_SR = 16000
+
+_TLS = threading.local()
+
+
+def _nw() -> int:
+    """FFT worker count: all cores, or one inside a pool task (already parallel)."""
+    return 1 if getattr(_TLS, "in_pool", False) else -1
 
 
 def mel_filterbank(sr: int, n_fft: int, n_mels: int, fmin: float, fmax: float) -> np.ndarray:
@@ -43,7 +52,7 @@ def mel_energies(x: np.ndarray, positions: np.ndarray, n_fft: int, fb: np.ndarra
     for s in range(0, len(positions), block):
         idx = positions[s:s + block, None] + base[None, :]
         np.clip(idx, 0, len(xp) - 1, out=idx)
-        spec = sfft.rfft(xp[idx] * win, axis=1, workers=-1)
+        spec = sfft.rfft(xp[idx] * win, axis=1, workers=_nw())
         pw = (spec.real * spec.real + spec.imag * spec.imag).astype(np.float32)
         out[s:s + block] = pw @ fbt
     return out

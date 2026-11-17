@@ -1,6 +1,8 @@
 """Alignment engine: speed detection, anchors, segmentation, fine offsets, cut points."""
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -8,7 +10,7 @@ from scipy import fft as sfft
 from scipy.signal import fftconvolve
 from scipy.ndimage import uniform_filter1d
 
-from .features import ANA_SR, features, frame_rms_db, pool
+from .features import ANA_SR, _TLS, _nw, features, frame_rms_db, pool
 
 HOP = 0.01          # coarse feature hop (100 fps)
 POOL = 4            # global search runs at 25 fps
@@ -43,13 +45,13 @@ class GlobalMatcher:
         self.N, self.B = R.shape
         self.T = T
         self.n = sfft.next_fast_len(self.N + T, real=True)
-        self.Rf = sfft.rfft(R.astype(np.float32), self.n, axis=0, workers=-1)
+        self.Rf = sfft.rfft(R.astype(np.float32), self.n, axis=0, workers=_nw())
         c = np.concatenate([[0.0], np.cumsum((R.astype(np.float64) ** 2).sum(axis=1))])
         self.wnorm = np.sqrt(np.maximum(c[T:] - c[:-T], 0) + NCC_REG * T * self.B)
 
     def ncc(self, C: np.ndarray) -> np.ndarray:
-        Cf = sfft.rfft(C.astype(np.float32), self.n, axis=0, workers=-1)
-        num = sfft.irfft((self.Rf * np.conj(Cf)).sum(axis=1), self.n, workers=-1)
+        Cf = sfft.rfft(C.astype(np.float32), self.n, axis=0, workers=_nw())
+        num = sfft.irfft((self.Rf * np.conj(Cf)).sum(axis=1), self.n, workers=_nw())
         num = num[: self.N - self.T + 1]
         cn = np.sqrt((C.astype(np.float64) ** 2).sum()) + 1e-9
         return num / (self.wnorm * cn)
@@ -72,14 +74,14 @@ def gcc_phat(a: np.ndarray, b: np.ndarray, sr: int, max_lag: float,
     n = sfft.next_fast_len(len(a) + len(b), real=True)
     wa = np.hanning(len(a)).astype(np.float32)
     wb = np.hanning(len(b)).astype(np.float32)
-    A = sfft.rfft(a * wa, n, workers=-1)
-    Bf = sfft.rfft(b * wb, n, workers=-1)
+    A = sfft.rfft(a * wa, n, workers=_nw())
+    Bf = sfft.rfft(b * wb, n, workers=_nw())
     G = A * np.conj(Bf)
     mag = np.abs(G)
     G /= mag + 1e-9 * (mag.max() + 1e-30)
     f = np.fft.rfftfreq(n, 1.0 / sr)
     G[(f < fmin) | (f > fmax)] = 0
-    cc = sfft.irfft(G, n, workers=-1)
+    cc = sfft.irfft(G, n, workers=_nw())
     L = int(max_lag * sr)
     cc = np.concatenate([cc[-L:], cc[:L + 1]])
     m = int(np.argmax(cc))
@@ -125,15 +127,17 @@ def find_anchors(S: np.ndarray, R: np.ndarray, k: float, active: np.ndarray,
     excl = int(round(1.0 / (HOP * POOL)))
     if starts is None:
         starts = list(range(0, len(S) - T, step))
-    anchors = []
-    for n, i in enumerate(starts):
-        if progress and n % 50 == 0:
-            progress(n / max(1, len(starts)))
+    done = [0]
+
+    def one(i):
+        done[0] += 1
+        if progress and done[0] % 50 == 0:
+            progress(done[0] / max(1, len(starts)))
         if active[i:i + T].mean() < 0.3:
-            continue
+            return None
         c4 = S4[i // POOL:i // POOL + T4]
         if len(c4) < T4:
-            continue
+            return None
         v = gm.ncc(c4)
         b = int(np.argmax(v))
         v2 = v.copy()
@@ -157,9 +161,10 @@ def find_anchors(S: np.ndarray, R: np.ndarray, k: float, active: np.ndarray,
             m = int(np.argmax(vals))
             if best is None or vals[m] > best[1]:
                 best = (lags[m] + parabolic(vals, m), float(vals[m]))
-        anchors.append(Anchor(src_raw=i * HOP / k, ref=best[0] * HOP, ncc=best[1],
-                              ratio=max(ratio, 0.0)))
-    return anchors
+        return Anchor(src_raw=i * HOP / k, ref=best[0] * HOP, ncc=best[1],
+                      ratio=max(ratio, 0.0))
+
+    return [a for a in pmap(one, starts) if a is not None]
 
 
 def is_confident(a: Anchor, ncc_thr: float = 0.15, ratio_thr: float = 1.2) -> bool:
@@ -171,7 +176,8 @@ def is_confident(a: Anchor, ncc_thr: float = 0.15, ratio_thr: float = 1.2) -> bo
 def detect_speed(src16: np.ndarray, R: np.ndarray, log, n_probe: int = 30) -> tuple[float, dict]:
     scores = {}
     T = int(round(6.0 / HOP)) // POOL * POOL
-    for name, k in SPEED_CANDIDATES.items():
+
+    def score(k):
         S = features(src16, speed=k)
         act = active_mask(src16, len(S), k)
         hi = max(1, len(S) - T - 1)
@@ -179,7 +185,11 @@ def detect_speed(src16: np.ndarray, R: np.ndarray, log, n_probe: int = 30) -> tu
         an = find_anchors(S, R, k, act, starts=starts)
         vals = sorted((a.ncc for a in an), reverse=True)
         top = vals[:max(3, len(vals) // 2)]
-        scores[name] = float(np.mean(top)) if top else 0.0
+        return float(np.mean(top)) if top else 0.0
+
+    # candidates in parallel (find_anchors runs serially inside a pool task)
+    for (name, k), v in zip(SPEED_CANDIDATES.items(), pmap(score, SPEED_CANDIDATES.values())):
+        scores[name] = v
         log(f"    speed {name:<18} x{k:.6f}  score {scores[name]:.3f}")
     best = max(scores, key=scores.get)
     return SPEED_CANDIDATES[best], scores
@@ -288,6 +298,26 @@ def build_segments(anchors: list[Anchor], k: float, chunk_s: float, tol: float =
 
 # ---------------------------------------------------------------- fine offsets
 
+_POOL = None
+
+
+def pmap(fn, items) -> list:
+    """fn over items on all cores, results in order. The work is FFT/numpy, which runs
+    without the GIL; each task keeps its FFTs single-threaded to avoid oversubscription."""
+    global _POOL
+    items = list(items)
+    if len(items) < 4 or getattr(_TLS, "in_pool", False):
+        return [fn(x) for x in items]   # nested: already on a pool thread
+    if _POOL is None:
+        _POOL = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
+
+    def run(x):
+        _TLS.in_pool = True
+        return fn(x)
+
+    return list(_POOL.map(run, items))
+
+
 def fine_measure(ref16: np.ndarray, src16: np.ndarray, r0: float, off: float, length: float,
                  max_lag: float = 0.08, phat_thr: float = 7.0):
     """Refine offset at one window. Returns (offset, confidence, method) or None."""
@@ -314,7 +344,10 @@ def fine_measure(ref16: np.ndarray, src16: np.ndarray, r0: float, off: float, le
     nl = Fb.shape[1] - n + 1
     if nl < 3:
         return None
-    vals = np.array([(Fa * Fb[:, j:j + n]).sum() for j in range(nl)]) / Fa.size
+    # all lags at once: a (bands x n x lags) window view of Fb, contracted with Fa
+    vals = np.einsum("bn,bnj->j", Fa,
+                     np.lib.stride_tricks.sliding_window_view(Fb, nl, axis=1)[:, :n],
+                     optimize=True) / Fa.size
     j = int(np.argmax(vals))
     if vals[j] < 0.12 or j == 0 or j == nl - 1:
         return None
@@ -326,19 +359,31 @@ def fine_measure(ref16: np.ndarray, src16: np.ndarray, r0: float, off: float, le
 FLUX_HOP = 16  # samples at 16 kHz = 1 ms
 
 
+_FLUX_CACHE: dict = {}
+
+
+def _flux_bands(n_fft: int, n_bands: int):
+    """Hann window and the (bins x bands) matrix that averages magnitudes per band."""
+    key = (n_fft, n_bands)
+    if key not in _FLUX_CACHE:
+        f = np.fft.rfftfreq(n_fft, 1.0 / ANA_SR)
+        edges = np.geomspace(150, 7000, n_bands + 1)
+        W = np.stack([((f >= lo) & (f < hi)) / max(1, ((f >= lo) & (f < hi)).sum())
+                      for lo, hi in zip(edges[:-1], edges[1:])], axis=1).astype(np.float32)
+        _FLUX_CACHE[key] = (np.hanning(n_fft).astype(np.float32), W)
+    return _FLUX_CACHE[key]
+
+
 def onset_flux(x: np.ndarray, n_fft: int = 256, n_bands: int = 8) -> np.ndarray:
     """Half-wave rectified log-magnitude flux in log-spaced bands, 1 ms hop, z-scored."""
-    sr = ANA_SR
     n = (len(x) - n_fft) // FLUX_HOP + 1
     if n < 2:
         return np.zeros((n_bands, 0), np.float32)
-    idx = np.arange(n)[:, None] * FLUX_HOP + np.arange(n_fft)
-    win = np.hanning(n_fft).astype(np.float32)
-    mag = np.abs(sfft.rfft(x[idx] * win, axis=1, workers=-1))
-    f = np.fft.rfftfreq(n_fft, 1.0 / sr)
-    edges = np.geomspace(150, 7000, n_bands + 1)
-    B = np.stack([np.log(mag[:, (f >= lo) & (f < hi)].mean(1) + 1e-5)
-                  for lo, hi in zip(edges[:-1], edges[1:])])
+    win, W = _flux_bands(n_fft, n_bands)
+    frames = np.lib.stride_tricks.sliding_window_view(np.asarray(x, np.float32),
+                                                      n_fft)[::FLUX_HOP][:n]
+    mag = np.abs(sfft.rfft(frames * win, axis=1, workers=_nw()))
+    B = np.log(mag @ W + 1e-5).T
     F = np.maximum(np.diff(B, axis=1), 0)
     F -= F.mean(1, keepdims=True)
     F /= F.std(1, keepdims=True) + 1e-9
@@ -349,14 +394,13 @@ def fine_segments(segs: list[Segment], ref16, src16, k: float, chunk_s: float, p
     total = sum(len(s.anchors) for s in segs)
     done = 0
     for s in segs:
-        s.fine = []
-        for a in s.anchors:
-            done += 1
-            if progress and done % 20 == 0:
-                progress(done / max(1, total))
-            res = fine_measure(ref16, src16, a.ref, a.off(k), chunk_s)
-            if res:
-                s.fine.append((a.src_raw * k + chunk_s / 2, res[0], res[1], res[2]))
+        res_all = pmap(lambda a: fine_measure(ref16, src16, a.ref, a.off(k), chunk_s),
+                       s.anchors)
+        done += len(s.anchors)
+        if progress:
+            progress(done / max(1, total))
+        s.fine = [(a.src_raw * k + chunk_s / 2, res[0], res[1], res[2])
+                  for a, res in zip(s.anchors, res_all) if res]
         summarize_fine(s)
 
 
@@ -507,8 +551,8 @@ def coherence_sim(ref16: np.ndarray, src16: np.ndarray, offset: float, f0: int, 
     vi = np.nonzero(valid)[0]
     for s in range(0, len(vi), block):
         ii = vi[s:s + block]
-        X = sfft.rfft(rp[p[ii, None] + base] * win, axis=1, workers=-1)[:, band]
-        Y = sfft.rfft(sp[qi[ii, None] + base] * win, axis=1, workers=-1)[:, band] * rot
+        X = sfft.rfft(rp[p[ii, None] + base] * win, axis=1, workers=_nw())[:, band]
+        Y = sfft.rfft(sp[qi[ii, None] + base] * win, axis=1, workers=_nw())[:, band] * rot
         G = X * np.conj(Y)
         m = np.abs(G) + 1e-20
         w = m ** beta
@@ -864,14 +908,17 @@ def track_offsets(ref16, src16, Rb, Sb, base_off: float, t0: float, t1: float,
     T = int(round(win * fps))
     L = int(round(max_jump * fps))
     excl = 5
-    out = []
+    starts = []
     t = max(0.0, t0)
     while t + win <= t1:
+        starts.append(t)
+        t += step
+
+    def one(t):
         f = int(round(t * fps))
         g = f - int(round(base_off * fps))
         if f + T > len(Rb) or g - L < 0 or g + T + L > len(Sb):
-            t += step
-            continue
+            return None
         C = Rb[f:f + T]
         Sseg = Sb[g - L:g + T + L]
         num = fftconvolve(Sseg, C[::-1], mode="valid", axes=0).sum(1)
@@ -887,9 +934,10 @@ def track_offsets(ref16, src16, Rb, Sb, base_off: float, t0: float, t1: float,
             off = base_off + (L - (j + parabolic(ncc, j))) / fps
             res = fine_measure(ref16, src16, t, off, win, max_lag=0.03)
             if res is not None:
-                out.append((t + win / 2, res[0], res[1], res[2]))
-        t += step
-    return out
+                return (t + win / 2, res[0], res[1], res[2])
+        return None
+
+    return [o for o in pmap(one, starts) if o is not None]
 
 
 def offset_runs(obs: list[tuple], tol: float = 0.004, min_n: int = 4) -> list[list[tuple]]:
