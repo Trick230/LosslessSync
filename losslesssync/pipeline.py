@@ -98,8 +98,16 @@ def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float 
 
 
 def sync(ref_path: str, src_path: str, out_path: str | None, opt: Options,
-         log_fn=print, progress=None) -> dict:
+         log_fn=print, progress=None, split=None) -> dict:
+    """split: a separation already started with stems.start_split (batch mode starts the
+    next episode's while this one finishes); it is killed when the sync ends."""
     log = Log(log_fn)
+def uses_stems(out_path, opt: Options) -> bool:
+    """Whether a sync separates the source (so the separation can start right away)."""
+    return bool(out_path and not opt.analyze_only and opt.pitch == "keep"
+                and opt.keep_engine == "stems")
+
+
     prog = progress or (lambda stage, frac: None)
     ref_streams = media.audio_streams(ref_path)
     src_streams = media.audio_streams(src_path)
@@ -110,10 +118,10 @@ def sync(ref_path: str, src_path: str, out_path: str | None, opt: Options,
 
     out_dir = os.path.dirname(os.path.abspath(out_path or opt.report or src_path))
     tmp = tempfile.mkdtemp(prefix="losslesssync_", dir=opt.tmp_dir or out_dir)
-    split = None
     try:
-        if (out_path and not opt.analyze_only and opt.pitch == "keep"
-                and opt.keep_engine == "stems"):
+        if split:
+            log("vocals separation already started in the background")
+        elif uses_stems(out_path, opt):
             split = stems.start_split(src_path, src_st, tmp, opt, log)
         return _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st,
                      src_st, tmp, split)

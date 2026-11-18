@@ -6,13 +6,16 @@ import fnmatch
 import json
 import os
 import re
+import shutil
+import tempfile
+import threading
 import time
 import traceback
 import unicodedata
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from . import report_html
-from .pipeline import Options, sync
+from . import media, report_html, stems
+from .pipeline import Options, sync, uses_stems
 
 MEDIA_EXT = {".mkv", ".m2ts", ".mts", ".ts", ".mp4", ".m4v", ".mka", ".wav", ".w64", ".flac",
              ".ac3", ".eac3", ".ec3", ".dts", ".thd", ".m4a", ".aac", ".opus", ".mp2", ".mpg"}
@@ -107,7 +110,7 @@ def summarize(report: dict) -> dict:
 
 
 def run_episode(ref: str, src: str, out: str, rep: str, log_path: str, opt: Options,
-                threads: int | None) -> dict:
+                threads: int | None, split=None) -> dict:
     """One episode; all its log lines go to log_path. Never raises."""
     if threads:
         os.environ["LOSSLESSSYNC_THREADS"] = str(threads)
@@ -117,7 +120,8 @@ def run_episode(ref: str, src: str, out: str, rep: str, log_path: str, opt: Opti
             lf.write(msg + "\n")
             lf.flush()
         try:
-            report = sync(ref, src, out, dataclasses.replace(opt, report=rep), log_fn=log)
+            report = sync(ref, src, out, dataclasses.replace(opt, report=rep), log_fn=log,
+                          split=split)
             return {"status": "ok", "seconds": time.time() - t0, **summarize(report)}
         except Exception as e:  # keep going with the next episode
             lf.write(traceback.format_exc())
@@ -148,6 +152,70 @@ def needs_check(r: dict, p95_ms: float) -> list[str]:
     if r.get("median_ms") is None and r.get("status") == "ok":
         why.append("not verified")
     return why
+
+
+class _Prefetch:
+    """An episode's vocals separation, started in a thread (the source decode takes a few
+    seconds) into its own temp folder."""
+
+    def __init__(self, src: str, opt: Options, out_dir: str):
+        self.dir = tempfile.mkdtemp(prefix="losslesssync_sep_", dir=opt.tmp_dir or out_dir)
+        self.keep = opt.keep_temp
+        self.split = None
+        self.thread = threading.Thread(target=self._start, args=(src, opt), daemon=True)
+        self.thread.start()
+
+    def _start(self, src, opt):
+        try:
+            st = media.pick_stream(media.audio_streams(src), opt.src_track, ("por",))
+            self.split = stems.start_split(src, st, self.dir, opt, lambda m: None)
+        except Exception:   # the episode's own sync starts it again and reports the error
+            self.split = None
+
+    def get(self):
+        self.thread.join()
+        return self.split
+
+    def close(self):
+        self.thread.join()
+        if self.split:
+            self.split[0].kill()
+        if not self.keep:
+            shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def _quiet(fn, arg, log_path):
+    """Starting the next episode's separation must not fail the current episode."""
+    try:
+        fn(arg)
+    except Exception as e:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"could not start the next episode's separation: {e}\n")
+
+
+def _run_stems_pipelined(todo, done, log_fn):
+    """One episode at a time, but the next episode's separation (GPU) starts as soon as the
+    current one's is done, so it runs while this one finishes on the CPU."""
+    pre: dict[int, _Prefetch] = {}
+
+    def start(i):
+        if i < len(todo) and i not in pre:
+            t = todo[i]
+            pre[i] = _Prefetch(t[2], t[6], os.path.dirname(os.path.abspath(t[3])))
+
+    try:
+        for i, t in enumerate(todo):
+            log_fn(f"syncing {t[0]} ...")
+            start(i)
+            split = pre[i].get()
+            if split:
+                split[0].on_gpu_free = lambda i=i: _quiet(start, i + 1, t[5])
+            done(t, run_episode(*t[1:], None, split))
+            start(i + 1)              # if this episode never reached its stretch
+            pre.pop(i).close()
+    finally:
+        for p in pre.values():
+            p.close()
 
 
 def batch(ref_dir: str, src_dir: str, out_dir: str, opt: Options, fmt: str = "flac",
@@ -194,7 +262,9 @@ def batch(ref_dir: str, src_dir: str, out_dir: str, opt: Options, fmt: str = "fl
                else r.get("error", "").splitlines()[0][:200])
         log_fn(f"[{len(results)}/{len(tasks)}] {t[0]} {r['status']} ({r['seconds']:.0f} s) {msg}")
 
-    if jobs == 1:
+    if jobs == 1 and todo and uses_stems(todo[0][3], todo[0][6]):
+        _run_stems_pipelined(todo, done, log_fn)
+    elif jobs == 1:
         for t in todo:
             log_fn(f"syncing {t[0]} ...")
             done(t, run_episode(*t[1:], None))

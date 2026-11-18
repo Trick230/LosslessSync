@@ -34,6 +34,7 @@ class Helper:
 
     def __init__(self, opt, tmp, name, *args):
         self.cmd = _cmd(opt, *args)
+        self.on_gpu_free = None           # called once the separation is done
         self.err_path = os.path.join(tmp, name + ".err")
         self.err = open(self.err_path, "wb")
         self.p = subprocess.Popen(self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -88,6 +89,8 @@ def stretch(split, tmp: str, k: float, opt, log, measure):
     job.send(repr(k))                     # the helper reads it once the vocals are out
     log("  waiting for the vocals separation...")
     job.expect("vocals")
+    if job.on_gpu_free:
+        job.on_gpu_free()
     voc_k = os.path.join(tmp, "vocals_k.wav")
     log(f"  vocals: WSOLA +-{opt.wsola_tol_ms:g} ms up to +-{opt.wsola_max_ms:g} ms; "
         "rest: Signalsmith Stretch...")

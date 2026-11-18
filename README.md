@@ -107,7 +107,9 @@ plus `batch_summary.json` and `index.html` (all episodes, linking their pages) f
 them), a failing episode does not stop the rest, and episodes with dropouts or a p95
 error above 1 ms are listed for checking. `--dry-run` shows the pairing only. `-j 2` runs
 two episodes at once (about 0.9 GB RAM each); the sync options above apply to every
-episode.
+episode. With `--keep-engine stems` and one job, the next episode's vocals separation
+starts on the GPU as soon as the current episode's is done, so it runs while the current
+one finishes on the CPU.
 
 ### Graphical interface
 

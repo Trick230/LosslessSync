@@ -45,7 +45,11 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
     import numpy as np
     import soundfile as sf
     import soxr
+    import torch
     from audio_separator.separator import Separator
+    # the GPU does the work: more CPU threads only spin (T05E01: 1.9 cores -> 0.75, same
+    # wall time), and in a batch they slow the previous episode's stretch down
+    torch.set_num_threads(1)
     with tempfile.TemporaryDirectory(dir=os.path.dirname(os.path.abspath(voc_out))) as tmp:
         # fp16 autocast and 4 chunks per batch: 1.9x faster on an RTX 4060, 66 dB from
         # the fp32 stem (inaudible)
@@ -57,6 +61,12 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
         sep.load_model(model_filename=model)
         files = sep.separate(src)
         del sep
+        # free the VRAM now: the next episode's separation starts on "vocals" below,
+        # while this process still runs the Signalsmith stretch
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         v, sr_v = sf.read(os.path.join(tmp, os.path.basename(files[0])), dtype="float32",
                           always_2d=True)
     x, sr = sf.read(src, dtype="float32", always_2d=True)
