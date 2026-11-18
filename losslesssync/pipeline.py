@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 import numpy as np
+from scipy import fft as sp_fft
 
 from . import align, media, report_html, stems, wavio, wsola
 from .features import ANA_SR, features
@@ -344,9 +345,10 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, spli
         log("time-stretching source keeping its pitch (vocals WSOLA + rest Signalsmith)...")
         split = split or stems.start_split(src_path, src_st, tmp, opt, log)
         n_out = int(round(wavio.read_info(split[1]).frames * k))
+        dec = {}
         def measure(path, step):
-            return stretch_latency(inter16, media.decode_mono(path, media.audio_streams(path)[0],
-                                                              ANA_SR), step)[0]
+            dec[path] = media.decode_mono(path, media.audio_streams(path)[0], ANA_SR)
+            return stretch_latency(inter16, dec[path], step)[0]
         voc_k, rest_k, engine, lat_v, lat_r = stems.stretch(split, tmp, k, opt, log, measure)
         shift = int(round((lat_r - lat_v) * src_st.sample_rate))  # latency > 0: content early
         log(f"  stem latencies: vocals {lat_v * 1000:+.3f} ms, rest {lat_r * 1000:+.3f} ms")
@@ -355,7 +357,19 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, spli
         if not opt.keep_temp:
             os.remove(voc_k)
             os.remove(rest_k)
-        keep16 = media.decode_mono(keep_wav, media.audio_streams(keep_wav)[0], ANA_SR)
+        # the analysis copy of the mix, from the stem decodes (the resampler is linear)
+        # instead of decoding keep.wav again; the rest gets the fractional shift exactly
+        # (band-limited, in the frequency domain)
+        v16, r16 = dec.pop(voc_k), dec.pop(rest_k)
+        n16 = int(round(n_out * ANA_SR / src_st.sample_rate))
+        d = shift * ANA_SR / src_st.sample_rate
+        nf = sp_fft.next_fast_len(max(n16, len(r16)) + int(abs(d)) + 64, real=True)
+        R16 = sp_fft.rfft(r16, nf, workers=-1)
+        R16 *= np.exp(-2j * np.pi * np.fft.rfftfreq(nf) * d)
+        keep16 = sp_fft.irfft(R16, nf, workers=-1)[:n16].astype(np.float32)
+        del R16
+        keep16[:min(n16, len(v16))] += v16[:n16]
+        del v16, r16
     elif opt.keep_engine == "wsola":
         log(f"time-stretching source keeping its pitch (WSOLA, +-{opt.wsola_tol_ms:g} ms, "
             f"up to +-{opt.wsola_max_ms:g} ms)...")

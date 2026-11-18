@@ -29,14 +29,26 @@ def _env():
 
 
 class Helper:
-    """A helper-Python job running in the background (stderr kept in a file)."""
+    """A helper-Python job running in the background (stderr kept in a file; stdin and
+    stdout are pipes for a line protocol)."""
 
     def __init__(self, opt, tmp, name, *args):
         self.cmd = _cmd(opt, *args)
         self.err_path = os.path.join(tmp, name + ".err")
         self.err = open(self.err_path, "wb")
-        self.p = subprocess.Popen(self.cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                  stderr=self.err, env=_env())
+        self.p = subprocess.Popen(self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=self.err, env=_env(), text=True)
+
+    def send(self, line: str):
+        self.p.stdin.write(line + "\n")
+        self.p.stdin.flush()
+
+    def expect(self, line: str):
+        """Waits for the helper to print this line (raises if it exits first)."""
+        got = self.p.stdout.readline().strip()
+        if got != line:
+            self.wait()
+            raise media.MediaError(f"helper said {got!r}, expected {line!r}: {' '.join(self.cmd)}")
 
     def wait(self):
         rc = self.p.wait()
@@ -55,41 +67,39 @@ class Helper:
 
 def start_split(src_path, src_st, tmp, opt, log) -> tuple[Helper, str, str, str]:
     """Decode the source and start separating it in the background: it runs on the GPU
-    while the alignment runs on the CPU. Returns (job, raw, vocals, rest) WAV paths."""
+    while the alignment runs on the CPU; the same job then stretches the rest (stems.stretch
+    sends it the ratio). Returns (job, raw, vocals, stretched rest) WAV paths."""
     if src_st.channels > 2:
         raise media.MediaError("--keep-engine stems needs a mono or stereo source")
     raw = os.path.join(tmp, "raw.wav")
-    voc, rest = os.path.join(tmp, "vocals.wav"), os.path.join(tmp, "rest.wav")
+    voc, rest_k = os.path.join(tmp, "vocals.wav"), os.path.join(tmp, "rest_k.wav")
     media.decode_to_wav(src_path, src_st, raw, src_st.channels, src_st.sample_rate)
     log(f"separating vocals in the background ({opt.sep_model})...")
-    job = Helper(opt, tmp, "separate", "separate", raw, voc, rest, opt.sep_model, opt.sep_model_dir)
-    return job, raw, voc, rest
+    job = Helper(opt, tmp, "separate", "separate", raw, voc, rest_k, opt.sep_model,
+                 opt.sep_model_dir)
+    return job, raw, voc, rest_k
 
 
 def stretch(split, tmp: str, k: float, opt, log, measure):
-    """Waits for the separation, then stretches the vocals (WSOLA, here) and the rest
-    (Signalsmith, helper) at the same time. measure(wav, step_s) gives a stretch latency.
+    """Waits for the separation, then stretches the vocals (WSOLA, here) while the helper
+    stretches the rest (Signalsmith). measure(wav, step_s) gives a stretch latency.
     Returns the two WAVs, the engine report and the vocals and rest latencies."""
-    job, raw, voc, rest = split
+    job, raw, voc, rest_k = split
+    job.send(repr(k))                     # the helper reads it once the vocals are out
     log("  waiting for the vocals separation...")
+    job.expect("vocals")
+    voc_k = os.path.join(tmp, "vocals_k.wav")
+    log(f"  vocals: WSOLA +-{opt.wsola_tol_ms:g} ms up to +-{opt.wsola_max_ms:g} ms; "
+        "rest: Signalsmith Stretch...")
+    eng = wsola.stretch(voc, voc_k, k, opt.wsola_tol_ms, opt.wsola_max_ms)
+    lat_v = measure(voc_k, 5.0)           # while the rest is still stretching
     job.wait()
     if not opt.keep_temp:
         os.remove(raw)
-    voc_k, rest_k = os.path.join(tmp, "vocals_k.wav"), os.path.join(tmp, "rest_k.wav")
-    log(f"  vocals: WSOLA +-{opt.wsola_tol_ms:g} ms up to +-{opt.wsola_max_ms:g} ms; "
-        "rest: Signalsmith Stretch...")
-    ss = Helper(opt, tmp, "stretch", "stretch", rest, rest_k, repr(k))
-    try:
-        eng = wsola.stretch(voc, voc_k, k, opt.wsola_tol_ms, opt.wsola_max_ms)
-        lat_v = measure(voc_k, 5.0)       # while the rest is still stretching
-        ss.wait()
-    finally:
-        ss.kill()
     # Signalsmith's latency hardly varies: a window every 15 s is plenty
     lat_r = measure(rest_k, 15.0)
     if not opt.keep_temp:
         os.remove(voc)
-        os.remove(rest)
     return voc_k, rest_k, {"engine": "stems", "sep_model": opt.sep_model,
                            "vocals": eng, "rest": {"engine": "signalsmith"}}, lat_v, lat_r
 

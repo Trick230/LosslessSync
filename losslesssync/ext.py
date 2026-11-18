@@ -1,9 +1,11 @@
 """Helpers that run in a separate Python with the heavy optional packages.
 
     python -m losslesssync.ext stretch IN OUT K     Signalsmith Stretch (python-stretch)
-    python -m losslesssync.ext separate IN VOCALS REST MODEL MODEL_DIR
-                                                    vocals stem (audio-separator, GPU)
-                                                    and the residual IN - VOCALS
+    python -m losslesssync.ext separate IN VOCALS REST_K MODEL MODEL_DIR
+                                                    vocals stem (audio-separator, GPU);
+                                                    then reads K from stdin and stretches
+                                                    the residual IN - VOCALS with
+                                                    Signalsmith into REST_K
 
 Only numpy and soundfile from the main package's dependencies are needed here, so the
 helper Python can be a venv with torch (see README). Outputs are float WAV.
@@ -15,21 +17,29 @@ import sys
 import tempfile
 
 
-def stretch(src: str, dst: str, k: float):
+def _signalsmith(x, sr: int, k: float):
+    """(frames, channels) float32 -> stretched (channels, frames)."""
     import numpy as np
     import python_stretch as ps
-    import soundfile as sf
-    x, sr = sf.read(src, dtype="float32", always_2d=True)
     st = ps.Signalsmith.Stretch()
     st.preset(x.shape[1], sr)
     st.setTimeFactor(1.0 / k)
-    y = st.process(np.ascontiguousarray(x.T))
+    return st.process(np.ascontiguousarray(x.T))
+
+
+def stretch(src: str, dst: str, k: float):
+    import soundfile as sf
+    x, sr = sf.read(src, dtype="float32", always_2d=True)
+    y = _signalsmith(x, sr, k)
     del x
     sf.write(dst, y.T, sr, subtype="FLOAT", format="RF64")
 
 
-def separate(src: str, voc_out: str, rest_out: str, model: str, model_dir: str):
-    """Vocals stem at the source rate and channel count, and the residual src - vocals."""
+def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str):
+    """Vocals stem at the source rate and channel count; prints "vocals" on stdout once it is
+    written, then reads K from stdin and writes the residual src - vocals stretched by K.
+    It starts with the sync, before K is known; this way the stretch needs neither a
+    second process nor a residual WAV."""
     import logging
 
     import numpy as np
@@ -46,6 +56,7 @@ def separate(src: str, voc_out: str, rest_out: str, model: str, model_dir: str):
                                      "batch_size": 4, "overlap": None, "pitch_shift": 0})
         sep.load_model(model_filename=model)
         files = sep.separate(src)
+        del sep
         v, sr_v = sf.read(os.path.join(tmp, os.path.basename(files[0])), dtype="float32",
                           always_2d=True)
     x, sr = sf.read(src, dtype="float32", always_2d=True)
@@ -60,10 +71,23 @@ def separate(src: str, voc_out: str, rest_out: str, model: str, model_dir: str):
     sf.write(voc_out, out, sr, subtype="FLOAT", format="RF64")
     x -= out
     del out
-    sf.write(rest_out, x, sr, subtype="FLOAT", format="RF64")
+    _PROTO.write("vocals\n")
+    _PROTO.flush()
+    line = sys.stdin.readline().strip()
+    if not line:
+        return                       # the caller went away
+    y = _signalsmith(x, sr, float(line))
+    del x
+    sf.write(rest_k_out, y.T, sr, subtype="FLOAT", format="RF64")
 
+
+_PROTO = sys.stdout
 
 if __name__ == "__main__":
+    # stdout carries the protocol; anything the libraries print goes to stderr
+    _PROTO = os.fdopen(os.dup(1), "w")
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
     cmd, *a = sys.argv[1:]
     if cmd == "stretch":
         stretch(a[0], a[1], float(a[2]))
