@@ -11,7 +11,7 @@ from fractions import Fraction
 
 import numpy as np
 
-from . import align, media, report_html, wsola
+from . import align, media, report_html, stems, wavio, wsola
 from .features import ANA_SR, features
 from .render import render
 from .wavio import read_info
@@ -28,7 +28,10 @@ class Options:
     pitch: str = "auto"          # auto | resample | tempo | keep
     keep_engine: str = "wsola"   # stretcher for pitch=keep: wsola | rubberband
     wsola_tol_ms: float = 5.0    # WSOLA search tolerance (bounds the timing error)...
-    wsola_max_ms: float = 10.0   # ...widened up to this for a clearly better splice
+    wsola_max_ms: float = 10.0
+    ext_python: str = ""          # Python with audio-separator and python-stretch (stems)
+    sep_model: str = "vocals_mel_band_roformer.ckpt"
+    sep_model_dir: str = os.path.join(os.path.expanduser("~"), ".cache", "losslesssync", "models")   # ...widened up to this for a clearly better splice
     fill: str = "silence"        # silence | ref
     fade_ms: float = 300.0        # fade at edges next to a gap
     fade_opening: bool = False   # also fade into the opening titles
@@ -313,11 +316,41 @@ def write_report(report: dict, path: str):
         f.write(text)
 
 
+def stretch_latency(inter16, x16):
+    """Median offset of a pitch-kept stretch against the resampled source, with the windows."""
+    dur = min(len(inter16), len(x16)) / ANA_SR
+    ts = np.arange(10.0, dur - 16.0, 5.0)
+    res = align.pmap(lambda t: align.fine_measure(inter16, x16, t, 0.0, 6.0, max_lag=0.2), ts)
+    ok = [(t, r[0]) for t, r in zip(ts, res) if r is not None]
+    if len(ok) < 10:
+        raise media.MediaError("could not measure the time-stretch latency")
+    t, off = (np.array(x) for x in zip(*ok))
+    return float(np.median(off)), t, off
+
+
 def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt) -> str:
     """Stretch the source to the film timing keeping its pitch (WSOLA or Rubber Band R3) and
     shift the pieces by the stretcher's latency, measured against the resampled source."""
     keep_wav = os.path.join(tmp, "keep.wav")
-    if opt.keep_engine == "wsola":
+    if opt.keep_engine == "stems":
+        log("time-stretching source keeping its pitch (vocals WSOLA + rest Signalsmith)...")
+        raw_wav = os.path.join(tmp, "raw.wav")
+        media.decode_to_wav(src_path, src_st, raw_wav, src_st.channels, src_st.sample_rate)
+        n_out = int(round(wavio.read_info(raw_wav).frames * k))
+        voc_k, rest_k, engine = stems.stretch(raw_wav, tmp, k, opt, log)
+        if not opt.keep_temp:
+            os.remove(raw_wav)
+        lat_v = stretch_latency(inter16, media.decode_mono(voc_k, media.audio_streams(voc_k)[0], ANA_SR))[0]
+        lat_r = stretch_latency(inter16, media.decode_mono(rest_k, media.audio_streams(rest_k)[0], ANA_SR))[0]
+        shift = int(round((lat_r - lat_v) * src_st.sample_rate))  # latency > 0: content early
+        log(f"  stem latencies: vocals {lat_v * 1000:+.3f} ms, rest {lat_r * 1000:+.3f} ms")
+        engine["vocals"]["latency_ms"], engine["rest"]["latency_ms"] = lat_v * 1000, lat_r * 1000
+        stems.mix(voc_k, rest_k, keep_wav, shift, n_out)
+        if not opt.keep_temp:
+            os.remove(voc_k)
+            os.remove(rest_k)
+        keep16 = media.decode_mono(keep_wav, media.audio_streams(keep_wav)[0], ANA_SR)
+    elif opt.keep_engine == "wsola":
         log(f"time-stretching source keeping its pitch (WSOLA, +-{opt.wsola_tol_ms:g} ms, "
             f"up to +-{opt.wsola_max_ms:g} ms)...")
         raw_wav = os.path.join(tmp, "raw.wav")
@@ -330,14 +363,7 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt) -> s
         log("time-stretching source keeping its pitch (Rubber Band R3)...")
         engine = {"engine": "rubberband R3"}
         keep16 = media.make_intermediate(src_path, src_st, k, "keep", keep_wav, ANA_SR)
-    dur = min(len(inter16), len(keep16)) / ANA_SR
-    ts = np.arange(10.0, dur - 16.0, 5.0)
-    res = align.pmap(lambda t: align.fine_measure(inter16, keep16, t, 0.0, 6.0, max_lag=0.2), ts)
-    ok = [(t, r[0]) for t, r in zip(ts, res) if r is not None]
-    if len(ok) < 10:
-        raise media.MediaError("could not measure the time-stretch latency")
-    t, off = (np.array(x) for x in zip(*ok))
-    lat = float(np.median(off))
+    lat, t, off = stretch_latency(inter16, keep16)
     dev = np.abs(off - lat) * 1000
     slope = float(np.polyfit(t, off, 1)[0]) if len(t) > 2 else 0.0
     log(f"  stretch latency {lat * 1000:+.3f} ms over {len(off)} windows: "

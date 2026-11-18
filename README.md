@@ -41,6 +41,17 @@ pieces touch get a 4 ms splice guard.
 - `numpy` and `scipy`
 - `ffmpeg` and `ffprobe` on `PATH` (with `librubberband` for the time-stretch mode)
 - Tkinter, for the GUI (included with the standard Python installers)
+- Optional, for `--keep-engine stems`: a second Python (3.11 works) with
+  `audio-separator[gpu]`, `python-stretch` and `soundfile`, ideally with CUDA torch. A venv
+  keeps torch out of the main install:
+
+  ```
+  py -3.11 -m venv .venv-sep
+  .venv-sep\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu126
+  .venv-sep\Scripts\pip install "audio-separator[gpu]" python-stretch soundfile
+  ```
+
+  Then pass `--ext-python .venv-sep\Scripts\python.exe` (or set `LOSSLESSSYNC_EXT_PYTHON`).
 
 ## Installation
 
@@ -114,7 +125,10 @@ Or `python -m losslesssync gui`.
 | `--src-track N` | auto | Source audio track (`a:N`) |
 | `--speed` | `auto` | `auto`, `pal`, `1`, or an exact ratio such as `1001/960` |
 | `--pitch` | `auto` | `auto`, `resample`, `tempo` or `keep` (cut on the resampled source, render it time-stretched so the original PAL pitch is kept on the film timing) |
-| `--keep-engine` | `wsola` | stretcher for `--pitch keep`: `wsola` (built in; no phase-vocoder smearing, timing error bounded by `--wsola-max-ms`) or `rubberband` (R3) |
+| `--keep-engine` | `wsola` | stretcher for `--pitch keep`: `wsola` (built in; no phase-vocoder smearing, timing error bounded by `--wsola-max-ms`) `rubberband` (R3), or `stems`: the vocals are separated (RoFormer, GPU) and stretched with WSOLA, the rest with Signalsmith Stretch, then summed; the two always add back to the source |
+| `--ext-python` | `$LOSSLESSSYNC_EXT_PYTHON` | Python with `audio-separator` and `python-stretch`, for `stems` |
+| `--sep-model` | `vocals_mel_band_roformer.ckpt` | Vocals model for `stems` |
+| `--sep-model-dir` | `~/.cache/losslesssync/models` | Where separation models are stored (downloaded on first use) |
 | `--wsola-tol-ms` | `5` | WSOLA search tolerance: events stay within this of their exact place |
 | `--wsola-max-ms` | `10` | WSOLA widens its search up to this only for a clearly better splice (fewer artefacts; set it equal to `--wsola-tol-ms` for a hard bound) |
 | `--fill` | `silence` | What fills gaps: `silence` or `ref` |
@@ -178,7 +192,7 @@ python tests/check.py test_out/pal
 ```
 
 `tests/stretch_quality.py SOURCE [engine ...]` scores the artefacts of the pitch-keeping
-stretchers (`wsola[:tol[:frame_ms[:key=value...]]]`, `rubberband`, `atempo`): four
+stretchers (`wsola[:tol[:frame_ms[:key=value...]]]`, `rubberband`, `signalsmith`, `atempo`): four
 excerpts are stretched and stretched back, and the round trip is compared with the
 original on a log-mel spectrogram, forgiving +-10 ms of displacement. Lower is better.
 

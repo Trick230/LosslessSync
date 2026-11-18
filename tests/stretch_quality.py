@@ -8,7 +8,7 @@ stutters, clicks). Lower is better; only differences between engines on the same
 material mean anything.
 
     python tests/stretch_quality.py SOURCE [engine ...]
-    engines: wsola[:tol[:frame_ms[:stereo][:quiet_jump=x]]]  rubberband  atempo
+    engines: wsola[:tol[:frame_ms[:key=value...]]]  rubberband  signalsmith  atempo
 """
 from __future__ import annotations
 
@@ -49,6 +49,11 @@ def run_engine(name: str, src: str, dst: str, k: float):
         wsola.stretch(src, dst, k, **kw)
     elif kind == "rubberband":
         ffmpeg(["-i", src, "-af", speed_filter(k, SR, "keep"), "-c:a", "pcm_f32le", dst])
+    elif kind == "signalsmith":  # needs python-stretch in $LOSSLESSSYNC_EXT_PYTHON
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        subprocess.run([os.environ.get("LOSSLESSSYNC_EXT_PYTHON", sys.executable), "-m",
+                        "losslesssync.ext", "stretch", src, dst, repr(k)], check=True,
+                       capture_output=True, env=dict(os.environ, PYTHONPATH=root))
     elif kind == "atempo":
         ffmpeg(["-i", src, "-af", f"atempo={1 / k:.12f}", "-c:a", "pcm_f32le", dst])
     else:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from . import media
@@ -20,7 +21,8 @@ def make_options(args, **extra) -> Options:
         ref_track=args.ref_track, src_track=args.src_track,
         ref_langs=tuple(x.strip() for x in args.ref_lang.split(",") if x.strip()),
         speed=args.speed, pitch=args.pitch, keep_engine=args.keep_engine,
-        wsola_tol_ms=args.wsola_tol_ms, wsola_max_ms=args.wsola_max_ms, fill=args.fill, fade_ms=args.fade_ms,
+        wsola_tol_ms=args.wsola_tol_ms, wsola_max_ms=args.wsola_max_ms,
+        ext_python=args.ext_python, sep_model=args.sep_model, sep_model_dir=args.sep_model_dir, fill=args.fill, fade_ms=args.fade_ms,
         fade_opening=args.fade_opening, codec=args.codec, bitrate=args.bitrate,
         language=args.language, tmp_dir=args.tmp, **extra)
 
@@ -53,9 +55,19 @@ def add_common(s):
                    help="resample = undo PAL speed-up incl. pitch; tempo = keep pitch; "
                         "keep = cut on the resampled source, render it time-stretched "
                         "keeping the original (PAL) pitch")
-    s.add_argument("--keep-engine", default="wsola", choices=["wsola", "rubberband"],
+    s.add_argument("--keep-engine", default="wsola", choices=["wsola", "rubberband", "stems"],
                    help="stretcher for --pitch keep: wsola (default, no phase-vocoder "
-                        "smearing, timing error bounded by --wsola-tol-ms) or rubberband (R3)")
+                        "smearing, timing error bounded by --wsola-tol-ms), rubberband (R3), "
+                        "or stems (vocals separated and stretched with WSOLA, the rest with "
+                        "Signalsmith Stretch; needs --ext-python)")
+    s.add_argument("--ext-python", default=os.environ.get("LOSSLESSSYNC_EXT_PYTHON", sys.executable),
+                   help="Python with audio-separator and python-stretch, for --keep-engine "
+                        "stems (default $LOSSLESSSYNC_EXT_PYTHON or this Python)")
+    s.add_argument("--sep-model", default="vocals_mel_band_roformer.ckpt",
+                   help="audio-separator vocals model for --keep-engine stems")
+    s.add_argument("--sep-model-dir", default=os.path.join(os.path.expanduser("~"), ".cache",
+                                                           "losslesssync", "models"),
+                   help="where separation models are kept (downloaded on first use)")
     s.add_argument("--wsola-tol-ms", type=float, default=5.0,
                    help="WSOLA search tolerance in ms (default 5)")
     s.add_argument("--wsola-max-ms", type=float, default=10.0,
