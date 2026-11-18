@@ -66,9 +66,10 @@ def start_split(src_path, src_st, tmp, opt, log) -> tuple[Helper, str, str, str]
     return job, raw, voc, rest
 
 
-def stretch(split, tmp: str, k: float, opt, log) -> tuple[str, str, dict]:
+def stretch(split, tmp: str, k: float, opt, log, measure):
     """Waits for the separation, then stretches the vocals (WSOLA, here) and the rest
-    (Signalsmith, helper) at the same time. Returns the two WAVs and the engine report."""
+    (Signalsmith, helper) at the same time. measure(wav, step_s) gives a stretch latency.
+    Returns the two WAVs, the engine report and the vocals and rest latencies."""
     job, raw, voc, rest = split
     log("  waiting for the vocals separation...")
     job.wait()
@@ -80,14 +81,17 @@ def stretch(split, tmp: str, k: float, opt, log) -> tuple[str, str, dict]:
     ss = Helper(opt, tmp, "stretch", "stretch", rest, rest_k, repr(k))
     try:
         eng = wsola.stretch(voc, voc_k, k, opt.wsola_tol_ms, opt.wsola_max_ms)
+        lat_v = measure(voc_k, 5.0)       # while the rest is still stretching
         ss.wait()
     finally:
         ss.kill()
+    # Signalsmith's latency hardly varies: a window every 15 s is plenty
+    lat_r = measure(rest_k, 15.0)
     if not opt.keep_temp:
         os.remove(voc)
         os.remove(rest)
     return voc_k, rest_k, {"engine": "stems", "sep_model": opt.sep_model,
-                           "vocals": eng, "rest": {"engine": "signalsmith"}}
+                           "vocals": eng, "rest": {"engine": "signalsmith"}}, lat_v, lat_r
 
 
 def mix(voc_k: str, rest_k: str, out_wav: str, rest_shift: int, n_out: int):

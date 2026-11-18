@@ -1,0 +1,15 @@
+[package]
+name = "lls-dsp"
+version = "0.1.0"
+edition = "2021"
+description = "Native DSP kernels for LosslessSync (WSOLA time stretch)"
+publish = false
+
+[dependencies]
+realfft = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

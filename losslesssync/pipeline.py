@@ -324,10 +324,10 @@ def write_report(report: dict, path: str):
         f.write(text)
 
 
-def stretch_latency(inter16, x16):
+def stretch_latency(inter16, x16, step=5.0):
     """Median offset of a pitch-kept stretch against the resampled source, with the windows."""
     dur = min(len(inter16), len(x16)) / ANA_SR
-    ts = np.arange(10.0, dur - 16.0, 5.0)
+    ts = np.arange(10.0, dur - 16.0, step)
     res = align.pmap(lambda t: align.fine_measure(inter16, x16, t, 0.0, 6.0, max_lag=0.2), ts)
     ok = [(t, r[0]) for t, r in zip(ts, res) if r is not None]
     if len(ok) < 10:
@@ -344,9 +344,10 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, spli
         log("time-stretching source keeping its pitch (vocals WSOLA + rest Signalsmith)...")
         split = split or stems.start_split(src_path, src_st, tmp, opt, log)
         n_out = int(round(wavio.read_info(split[1]).frames * k))
-        voc_k, rest_k, engine = stems.stretch(split, tmp, k, opt, log)
-        lat_v = stretch_latency(inter16, media.decode_mono(voc_k, media.audio_streams(voc_k)[0], ANA_SR))[0]
-        lat_r = stretch_latency(inter16, media.decode_mono(rest_k, media.audio_streams(rest_k)[0], ANA_SR))[0]
+        def measure(path, step):
+            return stretch_latency(inter16, media.decode_mono(path, media.audio_streams(path)[0],
+                                                              ANA_SR), step)[0]
+        voc_k, rest_k, engine, lat_v, lat_r = stems.stretch(split, tmp, k, opt, log, measure)
         shift = int(round((lat_r - lat_v) * src_st.sample_rate))  # latency > 0: content early
         log(f"  stem latencies: vocals {lat_v * 1000:+.3f} ms, rest {lat_r * 1000:+.3f} ms")
         engine["vocals"]["latency_ms"], engine["rest"]["latency_ms"] = lat_v * 1000, lat_r * 1000

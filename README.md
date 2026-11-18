@@ -41,6 +41,10 @@ pieces touch get a 4 ms splice guard.
 - `numpy` and `scipy`
 - `ffmpeg` and `ffprobe` on `PATH` (with `librubberband` for the time-stretch mode)
 - Tkinter, for the GUI (included with the standard Python installers)
+- Optional, for speed: Rust, to build the native kernels (`cd rust && cargo build --release`).
+  `losslesssync` finds `rust/target/release/lls-dsp` by itself (or `$LOSSLESSSYNC_DSP`;
+  `LOSSLESSSYNC_DSP=off` forces the Python code). The WSOLA stretch is bit-identical and
+  about 6x faster (T05E01 `--pitch keep`: 80 s -> 59 s end to end).
 - Optional, for `--keep-engine stems`: a second Python (3.11 works) with
   `audio-separator[gpu]`, `python-stretch` and `soundfile`, ideally with CUDA torch. A venv
   keeps torch out of the main install:

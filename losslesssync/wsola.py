@@ -13,6 +13,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.signal import fftconvolve
 
+from . import native
 from .wavio import WavWriter, read_info
 
 
@@ -37,6 +38,14 @@ def stretch(in_wav: str, out_wav: str, k: float, tol_ms: float = 5.0,
     n_out = int(round(n_in * k))
     w = (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(N) / N)).astype(np.float32)  # sums to 1 at hop N/2
     wout = WavWriter(out_wav, n_out, ch, sr, info.mask)
+    if native.dsp():          # same algorithm in Rust (rust/src/main.rs), ~15x faster
+        wout.f.close()        # header only: the kernel appends the samples
+        med, mx, wide = native.run("wsola", in_wav, info.offset, n_in, ch, out_wav, n_out,
+                                   repr(k), N, D0, D, repr(margin), int(stereo)).split()
+        return {"engine": "wsola", "native": True, "tol_ms": tol_ms,
+                "tol_max_ms": D * 1000 / sr, "frame_ms": N * 1000 / sr,
+                "shift_median_ms": float(med) * 1000 / sr,
+                "shift_max_ms": float(mx) * 1000 / sr, "wide_pct": float(wide) * 100}
 
     def mid(a: int, n: int) -> np.ndarray:
         """Input [a, a + n) as (n, channels) or mono (n, 1), zero outside the file."""
