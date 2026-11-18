@@ -109,17 +109,24 @@ def sync(ref_path: str, src_path: str, out_path: str | None, opt: Options,
 
     out_dir = os.path.dirname(os.path.abspath(out_path or opt.report or src_path))
     tmp = tempfile.mkdtemp(prefix="losslesssync_", dir=opt.tmp_dir or out_dir)
+    split = None
     try:
+        if (out_path and not opt.analyze_only and opt.pitch == "keep"
+                and opt.keep_engine == "stems"):
+            split = stems.start_split(src_path, src_st, tmp, opt, log)
         return _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st,
-                     src_st, tmp)
+                     src_st, tmp, split)
     finally:
+        if split:
+            split[0].kill()
         if opt.keep_temp:
             log(f"temp files kept in {tmp}")
         else:
             shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src_st, tmp):
+def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src_st, tmp,
+          split=None):
     log("decoding analysis audio (mono 16 kHz)...")
     prog("decode", 0.0)
     ref16 = media.decode_mono(ref_path, ref_st, ANA_SR)
@@ -264,7 +271,8 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
 
     if not opt.analyze_only and out_path:
         if opt.pitch == "keep" and abs(k - 1) > 1e-4:
-            inter_wav = keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt)
+            inter_wav = keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt,
+                                   split)
         info = read_info(inter_wav)
         n_out = int(round(ref_dur * info.sr))
         fill = None
@@ -328,18 +336,15 @@ def stretch_latency(inter16, x16):
     return float(np.median(off)), t, off
 
 
-def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt) -> str:
+def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, split=None) -> str:
     """Stretch the source to the film timing keeping its pitch (WSOLA or Rubber Band R3) and
     shift the pieces by the stretcher's latency, measured against the resampled source."""
     keep_wav = os.path.join(tmp, "keep.wav")
     if opt.keep_engine == "stems":
         log("time-stretching source keeping its pitch (vocals WSOLA + rest Signalsmith)...")
-        raw_wav = os.path.join(tmp, "raw.wav")
-        media.decode_to_wav(src_path, src_st, raw_wav, src_st.channels, src_st.sample_rate)
-        n_out = int(round(wavio.read_info(raw_wav).frames * k))
-        voc_k, rest_k, engine = stems.stretch(raw_wav, tmp, k, opt, log)
-        if not opt.keep_temp:
-            os.remove(raw_wav)
+        split = split or stems.start_split(src_path, src_st, tmp, opt, log)
+        n_out = int(round(wavio.read_info(split[1]).frames * k))
+        voc_k, rest_k, engine = stems.stretch(split, tmp, k, opt, log)
         lat_v = stretch_latency(inter16, media.decode_mono(voc_k, media.audio_streams(voc_k)[0], ANA_SR))[0]
         lat_r = stretch_latency(inter16, media.decode_mono(rest_k, media.audio_streams(rest_k)[0], ANA_SR))[0]
         shift = int(round((lat_r - lat_v) * src_st.sample_rate))  # latency > 0: content early

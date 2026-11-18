@@ -20,57 +20,69 @@ from .wavio import WavWriter, read_info
 BLOCK = 1 << 20
 
 
-def ext(opt, *args, log=None):
-    cmd = [opt.ext_python, "-m", "losslesssync.ext", *args]
-    env = dict(os.environ, PYTHONPATH=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE, env=env)
-    if r.returncode != 0:
-        raise media.MediaError(f"helper failed ({r.returncode}): {' '.join(cmd)}\n"
-                               + r.stderr.decode(errors="replace")[-3000:])
+def _cmd(opt, *args):
+    return [opt.ext_python, "-m", "losslesssync.ext", *args]
 
 
-def split(raw_wav: str, voc_wav: str, rest_wav: str, tmp: str, opt):
-    """vocals stem at the source rate, and the residual source - vocals."""
-    info = read_info(raw_wav)
-    if info.channels > 2:
+def _env():
+    return dict(os.environ, PYTHONPATH=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+class Helper:
+    """A helper-Python job running in the background (stderr kept in a file)."""
+
+    def __init__(self, opt, tmp, name, *args):
+        self.cmd = _cmd(opt, *args)
+        self.err_path = os.path.join(tmp, name + ".err")
+        self.err = open(self.err_path, "wb")
+        self.p = subprocess.Popen(self.cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                  stderr=self.err, env=_env())
+
+    def wait(self):
+        rc = self.p.wait()
+        self.err.close()
+        if rc != 0:
+            with open(self.err_path, "rb") as f:
+                msg = f.read()[-3000:].decode(errors="replace")
+            raise media.MediaError(f"helper failed ({rc}): {' '.join(self.cmd)}\n{msg}")
+
+    def kill(self):
+        if self.p.poll() is None:
+            self.p.kill()
+            self.p.wait()
+        self.err.close()
+
+
+def start_split(src_path, src_st, tmp, opt, log) -> tuple[Helper, str, str, str]:
+    """Decode the source and start separating it in the background: it runs on the GPU
+    while the alignment runs on the CPU. Returns (job, raw, vocals, rest) WAV paths."""
+    if src_st.channels > 2:
         raise media.MediaError("--keep-engine stems needs a mono or stereo source")
-    sep_wav = os.path.join(tmp, "sep_vocals.wav")
-    ext(opt, "separate", raw_wav, sep_wav, opt.sep_model, opt.sep_model_dir)
-    media.run([media.tool("ffmpeg"), "-nostdin", "-v", "error", "-y", "-i", sep_wav,
-               "-af", f"aresample={info.sr}:resampler=soxr:precision=28", "-ac", str(info.channels),
-               "-c:a", "pcm_f32le", "-rf64", "auto", voc_wav], capture=False)
-    if not opt.keep_temp:
-        os.remove(sep_wav)
-    x = info.memmap()
-    v_in = read_info(voc_wav).memmap()
-    n = info.frames
-    vw = WavWriter(voc_wav + ".tmp", n, info.channels, info.sr, info.mask)
-    rw = WavWriter(rest_wav, n, info.channels, info.sr, info.mask)
-    for a in range(0, n, BLOCK):
-        b = min(a + BLOCK, n)
-        v = np.zeros((b - a, info.channels), np.float32)
-        hi = min(b, len(v_in))
-        if hi > a:
-            v[:hi - a] = v_in[a:hi]
-        vw.write(v)
-        rw.write(np.asarray(x[a:b], np.float32) - v)
-    vw.close()
-    rw.close()
-    del v_in, x
-    os.replace(voc_wav + ".tmp", voc_wav)
-
-
-def stretch(raw_wav: str, tmp: str, k: float, opt, log) -> tuple[str, str, dict]:
-    """Returns the stretched vocals and residual WAVs and the engine report."""
+    raw = os.path.join(tmp, "raw.wav")
     voc, rest = os.path.join(tmp, "vocals.wav"), os.path.join(tmp, "rest.wav")
-    log(f"  separating vocals ({opt.sep_model})...")
-    split(raw_wav, voc, rest, tmp, opt)
+    media.decode_to_wav(src_path, src_st, raw, src_st.channels, src_st.sample_rate)
+    log(f"separating vocals in the background ({opt.sep_model})...")
+    job = Helper(opt, tmp, "separate", "separate", raw, voc, rest, opt.sep_model, opt.sep_model_dir)
+    return job, raw, voc, rest
+
+
+def stretch(split, tmp: str, k: float, opt, log) -> tuple[str, str, dict]:
+    """Waits for the separation, then stretches the vocals (WSOLA, here) and the rest
+    (Signalsmith, helper) at the same time. Returns the two WAVs and the engine report."""
+    job, raw, voc, rest = split
+    log("  waiting for the vocals separation...")
+    job.wait()
+    if not opt.keep_temp:
+        os.remove(raw)
     voc_k, rest_k = os.path.join(tmp, "vocals_k.wav"), os.path.join(tmp, "rest_k.wav")
     log(f"  vocals: WSOLA +-{opt.wsola_tol_ms:g} ms up to +-{opt.wsola_max_ms:g} ms; "
         "rest: Signalsmith Stretch...")
-    eng = wsola.stretch(voc, voc_k, k, opt.wsola_tol_ms, opt.wsola_max_ms)
-    ext(opt, "stretch", rest, rest_k, repr(k))
+    ss = Helper(opt, tmp, "stretch", "stretch", rest, rest_k, repr(k))
+    try:
+        eng = wsola.stretch(voc, voc_k, k, opt.wsola_tol_ms, opt.wsola_max_ms)
+        ss.wait()
+    finally:
+        ss.kill()
     if not opt.keep_temp:
         os.remove(voc)
         os.remove(rest)
