@@ -13,8 +13,10 @@ def _fade(n: int, rising: bool) -> np.ndarray:
     return (w if rising else w[::-1]).astype(np.float32)[:, None]
 
 
-def _copy(w: WavWriter, src: np.ndarray, a: int, n: int, fade_in: int, fade_out: int):
-    """Write n frames of src starting at frame a (zeros outside src) with edge fades."""
+def _copy(w: WavWriter, src: np.ndarray, a: int, n: int, fade_in: int, fade_out: int,
+          gain: float = 1.0):
+    """Write n frames of src starting at frame a (zeros outside src) with edge fades,
+    scaled by gain."""
     pos = 0
     while pos < n:
         m = min(BLOCK, n - pos)
@@ -23,6 +25,8 @@ def _copy(w: WavWriter, src: np.ndarray, a: int, n: int, fade_in: int, fade_out:
         s0, s1 = max(lo, 0), min(hi, len(src))
         if s1 > s0:
             blk[s0 - lo:s1 - lo] = src[s0:s1]
+            if gain != 1.0:
+                blk[s0 - lo:s1 - lo] *= np.float32(gain)
         if fade_in and pos < fade_in:
             k = min(fade_in - pos, m)
             blk[:k] *= _fade(fade_in, True)[pos:pos + k]
@@ -35,8 +39,10 @@ def _copy(w: WavWriter, src: np.ndarray, a: int, n: int, fade_in: int, fade_out:
 
 
 def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
-           fill: WavInfo | None = None, fade_ms: float = 300.0, splice_ms: float = 4.0):
+           fill: WavInfo | None = None, fade_ms: float = 300.0, splice_ms: float = 4.0,
+           gain: float = 1.0):
     """pieces: sorted, non-overlapping {'start','end' (ref s), 'offset' (s)} on the ref timeline.
+    The source is scaled by gain (the reference fill is not).
 
     Edges next to a gap fade over fade_ms (inside the piece, so no extra source is used);
     pieces that butt against each other only get a splice_ms click guard."""
@@ -62,7 +68,7 @@ def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
             Fo = ms(p["fade_out_ms"]) if "fade_out_ms" in p else F
             fi = 0 if n0 == 0 else (Fi if n0 > cur and p.get("fade_in", True) else S)
             fo = 0 if n1 >= n_out else (Fo if nxt > n1 else S)
-            _copy(w, src, n0 - shift, n, min(fi, n // 2), min(fo, n // 2))
+            _copy(w, src, n0 - shift, n, min(fi, n // 2), min(fo, n // 2), gain)
         cur = n1
     if cur < n_out:
         _gap(w, ref, cur, n_out - cur, S, n_out)

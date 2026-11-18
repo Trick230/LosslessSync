@@ -26,7 +26,7 @@ def make_options(args, **extra) -> Options:
         speed=args.speed, pitch=args.pitch, keep_engine=engine,
         wsola_tol_ms=args.wsola_tol_ms, wsola_max_ms=args.wsola_max_ms,
         ext_python=ext or sys.executable, sep_model=args.sep_model, sep_model_dir=args.sep_model_dir, fill=args.fill, fade_ms=args.fade_ms,
-        fade_opening=args.fade_opening, codec=args.codec, bitrate=args.bitrate,
+        fade_opening=args.fade_opening, match_loudness=args.match_loudness, codec=args.codec, bitrate=args.bitrate,
         language=args.language, tmp_dir=args.tmp, **extra)
 
 
@@ -85,6 +85,9 @@ def add_common(s):
                    help="fade length (ms) where the track meets a gap (default 300)")
     s.add_argument("--fade-opening", action="store_true",
                    help="also fade into the opening titles (default: they start clean)")
+    s.add_argument("--no-match-loudness", dest="match_loudness", action="store_false",
+                   help="keep the source's level (default: one constant gain so the synced "
+                        "track has the reference's integrated loudness, EBU R128)")
     s.add_argument("--codec", choices=list(media.CODECS), help="override output codec")
     s.add_argument("--bitrate", help="bitrate for lossy codecs, e.g. 448k")
     s.add_argument("--language", default="por", help="language tag of the output track")

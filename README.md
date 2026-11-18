@@ -137,6 +137,7 @@ Or `python -m losslesssync gui`.
 | `--sep-model-dir` | `~/.cache/losslesssync/models` | Where separation models are stored (downloaded on first use) |
 | `--wsola-tol-ms` | `5` | WSOLA search tolerance: events stay within this of their exact place |
 | `--wsola-max-ms` | `10` | WSOLA widens its search up to this only for a clearly better splice (fewer artefacts; set it equal to `--wsola-tol-ms` for a hard bound) |
+| `--no-match-loudness` | off | Keep the source's level. By default one constant gain gives the synced track the reference's integrated loudness (EBU R128, measured over the synced parts only); no compression or limiting, and capped so the peaks stay below -0.1 dBFS (-1 dBFS for lossy codecs) |
 | `--fill` | `silence` | What fills gaps: `silence` or `ref` |
 | `--fade-ms` | `300` | Fade at the edges of gaps |
 | `--fade-opening` | off | Also fade into the opening titles |

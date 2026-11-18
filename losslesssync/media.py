@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -186,6 +189,35 @@ CODECS = {
 }
 EXT_CODEC = {".flac": "flac", ".wav": "wav", ".w64": "wav", ".ac3": "ac3", ".eac3": "eac3",
              ".ec3": "eac3", ".m4a": "aac", ".aac": "aac", ".opus": "opus", ".mka": "flac"}
+
+
+def loudness(path: str, stream: AudioStream, intervals: list[tuple[float, float]]
+             ) -> tuple[float, float] | None:
+    """Integrated loudness (EBU R128 / BS.1770, LUFS) and sample peak (dBFS) of a track,
+    measured only over the given (start, end) seconds. None if nothing is loud enough."""
+    sel = "+".join(f"between(t,{a:.6f},{b:.6f})" for a, b in intervals if b > a)
+    if not sel:
+        return None
+    # BS.1770 counts a mono track once; played on two speakers it is dual mono
+    dual = ":dual_mono=1" if stream.channels == 1 else ""
+    # the filter goes in a file: one between() per piece can outgrow the command line
+    fd, script = tempfile.mkstemp(suffix=".txt")
+    with os.fdopen(fd, "w") as f:
+        f.write(f"asetpts=PTS-STARTPTS,aselect='{sel}',"
+                f"ebur128=peak=sample:framelog=quiet{dual}")
+    cmd = [tool("ffmpeg"), "-nostdin", "-hide_banner", "-nostats", *_decoder_opts(stream),
+           "-i", path, "-map", f"0:a:{stream.aidx}", "-vn", "-sn", "-dn",
+           "-/af", script, "-f", "null", "-"]
+    try:
+        err = run(cmd).stderr.decode(errors="replace")
+    finally:
+        os.remove(script)
+    summary = err[err.rfind("Integrated loudness:"):]
+    i = re.search(r"I:\s+(-?[\d.]+|-inf) LUFS", summary)
+    p = re.search(r"Peak:\s+(-?[\d.]+|-inf) dBFS", summary)
+    if not i or not p or "inf" in i.group(1) or float(i.group(1)) <= -69.9:
+        return None
+    return float(i.group(1)), float(p.group(1)) if "inf" not in p.group(1) else -200.0
 
 
 def encode(in_wav: str, out_path: str, codec: str, bitrate: str | None, language: str = "por"):

@@ -6,6 +6,8 @@ import os
 import shutil
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as futures_wait
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -37,6 +39,7 @@ class Options:
     fade_ms: float = 300.0        # fade at edges next to a gap
     fade_opening: bool = False   # also fade into the opening titles
     dropout_fade_ms: float = 10.0  # fade at the edges of a signal dropout
+    match_loudness: bool = True  # one constant gain so the track is as loud as the reference
     codec: str | None = None
     bitrate: str | None = None
     language: str = "por"
@@ -97,17 +100,17 @@ def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float 
             "max_abs_ms": float(e.max()), "within_1ms_pct": float((e <= 1.0).mean() * 100)}
 
 
-def sync(ref_path: str, src_path: str, out_path: str | None, opt: Options,
-         log_fn=print, progress=None, split=None) -> dict:
-    """split: a separation already started with stems.start_split (batch mode starts the
-    next episode's while this one finishes); it is killed when the sync ends."""
-    log = Log(log_fn)
 def uses_stems(out_path, opt: Options) -> bool:
     """Whether a sync separates the source (so the separation can start right away)."""
     return bool(out_path and not opt.analyze_only and opt.pitch == "keep"
                 and opt.keep_engine == "stems")
 
 
+def sync(ref_path: str, src_path: str, out_path: str | None, opt: Options,
+         log_fn=print, progress=None, split=None) -> dict:
+    """split: a separation already started with stems.start_split (batch mode starts the
+    next episode's while this one finishes); it is killed when the sync ends."""
+    log = Log(log_fn)
     prog = progress or (lambda stage, frac: None)
     ref_streams = media.audio_streams(ref_path)
     src_streams = media.audio_streams(src_path)
@@ -279,10 +282,23 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     log_segments(log, report)
 
     if not opt.analyze_only and out_path:
-        if opt.pitch == "keep" and abs(k - 1) > 1e-4:
-            inter_wav = keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt,
-                                   split)
-        info = read_info(inter_wav)
+        pool = ThreadPoolExecutor(1)
+        ref_loud = (pool.submit(media.loudness, ref_path, ref_st,
+                                [(p["start"], p["end"]) for p in pieces])
+                    if opt.match_loudness else None)     # while the source is stretched
+        pool.shutdown(wait=False)
+        try:
+            if opt.pitch == "keep" and abs(k - 1) > 1e-4:
+                inter_wav = keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report,
+                                       opt, split)
+            info = read_info(inter_wav)
+        except BaseException:
+            if ref_loud:                  # do not leave its ffmpeg running behind the error
+                futures_wait([ref_loud])
+            raise
+        codec = opt.codec or media.EXT_CODEC.get(os.path.splitext(out_path)[1].lower(), "flac")
+        gain = (match_loudness(ref_loud, inter_wav, info, pieces, codec, log, report)
+                if ref_loud else 1.0)
         n_out = int(round(ref_dur * info.sr))
         fill = None
         if opt.fill == "ref":
@@ -292,7 +308,7 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         log("rendering...")
         prog("render", 0.0)
         out_wav = os.path.join(tmp, "out.wav")
-        render(info, pieces, n_out, out_wav, fill, fade_ms=opt.fade_ms)
+        render(info, pieces, n_out, out_wav, fill, fade_ms=opt.fade_ms, gain=gain)
         log("verifying result against the reference...")
         prog("verify", 0.0)
         out_st = media.audio_streams(out_wav)[0]
@@ -303,7 +319,6 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
             log(f"  {v['measured']}/{v['windows']} windows measured: median {v['median_abs_ms']:.3f} ms, "
                 f"p95 {v['p95_abs_ms']:.3f} ms, max {v['max_abs_ms']:.3f} ms, "
                 f"{v['within_1ms_pct']:.1f}% within 1 ms")
-        codec = opt.codec or media.EXT_CODEC.get(os.path.splitext(out_path)[1].lower(), "flac")
         log(f"encoding {codec} -> {out_path}")
         prog("encode", 0.0)
         media.encode(out_wav, out_path, codec, opt.bitrate, opt.language)
@@ -321,6 +336,52 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     prog("done", 1.0)
     log("done")
     return report
+
+
+# the gain never takes the source's sample peak above this; lossy codecs overshoot it
+# between samples, so they get more room
+HEADROOM_DB = {"flac": 0.1, "wav": 0.1}
+HEADROOM_LOSSY_DB = 1.0
+
+
+def _peak_dbfs(info) -> float:
+    """Sample peak of a whole WAV (the pieces plus the few samples around them that the
+    render splices in)."""
+    m, peak = info.memmap(), 0.0
+    for a in range(0, len(m), 1 << 20):
+        peak = max(peak, float(np.abs(m[a:a + (1 << 20)]).max(initial=0.0)))
+    return 20 * np.log10(peak) if peak > 0 else -200.0
+
+
+def match_loudness(ref_loud, inter_wav: str, info, pieces, codec: str, log, report) -> float:
+    """The constant gain that gives the synced track the reference's integrated loudness,
+    both measured over the synced pieces only. One multiplier for the whole track: no
+    compression or limiting, so the dynamics and the sound stay the original's. Capped so
+    it cannot push peaks into clipping."""
+    try:
+        ref_loud = ref_loud.result()
+        src_loud = media.loudness(inter_wav, media.audio_streams(inter_wav)[0],
+                                  [(p["start"] - p["offset"], p["end"] - p["offset"])
+                                   for p in pieces])
+    except media.MediaError as e:
+        log(f"  loudness: {str(e).splitlines()[0][:200]}")
+        ref_loud = src_loud = None
+    if not ref_loud or not src_loud:
+        log("  loudness: could not measure, gain left at 0 dB")
+        report["loudness"] = {"gain_db": 0.0, "measured": False}
+        return 1.0
+    (ref_i, _), (src_i, _) = ref_loud, src_loud
+    src_peak = _peak_dbfs(info)
+    want = ref_i - src_i
+    room = max(-HEADROOM_DB.get(codec, HEADROOM_LOSSY_DB) - src_peak, 0.0)
+    gain_db = min(want, room)
+    log(f"  loudness: reference {ref_i:.1f} LUFS, source {src_i:.1f} LUFS (peak {src_peak:.1f} "
+        f"dBFS) -> gain {gain_db:+.2f} dB"
+        + (f" (capped from {want:+.2f} dB so the peaks do not clip)" if gain_db < want else ""))
+    report["loudness"] = {"measured": True, "reference_lufs": ref_i, "source_lufs": src_i,
+                          "source_peak_dbfs": src_peak, "wanted_db": want, "gain_db": gain_db,
+                          "capped": gain_db < want, "output_lufs": src_i + gain_db}
+    return 10 ** (gain_db / 20)
 
 
 def write_report(report: dict, path: str):
