@@ -8,6 +8,13 @@
 //! round((m*H + H)/K) - H, splice searched over +-D, leaving +-D0 only when the
 //! normalised correlation is better by more than MARGIN. Prints the shift statistics
 //! (median |shift|, max |shift| in samples, fraction beyond D0) on stdout.
+//!
+//!   lls-dsp stretch OUT CHANNELS SR K          (built with --features signalsmith)
+//!
+//! Signalsmith Stretch (default preset) of the interleaved float32 frames read from stdin
+//! until EOF, stretched by K (N input frames -> round(N*K) output frames), written as an
+//! RF64 float WAV to OUT. The stretcher's latency is compensated, so the output lines up
+//! with the input to within a few samples (the caller measures the exact latency).
 
 use std::env;
 use std::fs::{File, OpenOptions};
@@ -248,10 +255,127 @@ fn wsola(args: &[String]) {
     println!("{med} {max} {wide}");
 }
 
+#[cfg(feature = "signalsmith")]
+/// RF64 float WAV written as it goes; the sizes are filled in by finish().
+struct Rf64 {
+    f: BufWriter<File>,
+    ch: usize,
+    frames: u64,
+}
+
+#[cfg(feature = "signalsmith")]
+impl Rf64 {
+    fn create(path: &str, ch: usize, sr: u32) -> Rf64 {
+        let f = File::create(path).unwrap_or_else(|e| die(&format!("{path}: {e}")));
+        let mut f = BufWriter::with_capacity(1 << 20, f);
+        let mut h = Vec::with_capacity(80);
+        h.extend_from_slice(b"RF64");
+        h.extend_from_slice(&u32::MAX.to_le_bytes());
+        h.extend_from_slice(b"WAVEds64");
+        h.extend_from_slice(&28u32.to_le_bytes());
+        h.extend_from_slice(&[0u8; 28]);
+        h.extend_from_slice(b"fmt ");
+        h.extend_from_slice(&16u32.to_le_bytes());
+        h.extend_from_slice(&3u16.to_le_bytes());
+        h.extend_from_slice(&(ch as u16).to_le_bytes());
+        h.extend_from_slice(&sr.to_le_bytes());
+        h.extend_from_slice(&(sr * 4 * ch as u32).to_le_bytes());
+        h.extend_from_slice(&(4 * ch as u16).to_le_bytes());
+        h.extend_from_slice(&32u16.to_le_bytes());
+        h.extend_from_slice(b"data");
+        h.extend_from_slice(&u32::MAX.to_le_bytes());
+        f.write_all(&h).unwrap_or_else(|e| die(&format!("{path}: {e}")));
+        Rf64 { f, ch, frames: 0 }
+    }
+
+    fn write(&mut self, x: &[f32]) {
+        let bytes: Vec<u8> = x.iter().flat_map(|v| v.to_le_bytes()).collect();
+        self.f.write_all(&bytes).unwrap_or_else(|e| die(&format!("write: {e}")));
+        self.frames += (x.len() / self.ch) as u64;
+    }
+
+    fn finish(mut self) {
+        let data = self.frames * 4 * self.ch as u64;
+        let mut d = Vec::with_capacity(24);
+        d.extend_from_slice(&(data + 72).to_le_bytes()); // file size - 8 (80-byte header)
+        d.extend_from_slice(&data.to_le_bytes());
+        d.extend_from_slice(&self.frames.to_le_bytes());
+        self.f.flush().unwrap_or_else(|e| die(&format!("write: {e}")));
+        let f = self.f.get_mut();
+        f.seek(SeekFrom::Start(20)).unwrap();
+        f.write_all(&d).unwrap_or_else(|e| die(&format!("write: {e}")));
+        f.flush().unwrap_or_else(|e| die(&format!("write: {e}")));
+    }
+}
+
+#[cfg(feature = "signalsmith")]
+/// Fills `buf` from `r` unless EOF comes first; returns the bytes read.
+fn read_full(r: &mut impl Read, buf: &mut [u8]) -> usize {
+    let mut got = 0;
+    while got < buf.len() {
+        match r.read(&mut buf[got..]) {
+            Ok(0) => break,
+            Ok(n) => got += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => die(&format!("stdin: {e}")),
+        }
+    }
+    got
+}
+
+#[cfg(feature = "signalsmith")]
+fn stretch(args: &[String]) {
+    if args.len() != 4 {
+        die("usage: lls-dsp stretch OUT CHANNELS SR K");
+    }
+    let ch: usize = args[1].parse().unwrap_or_else(|_| die("bad CHANNELS"));
+    let sr: u32 = args[2].parse().unwrap_or_else(|_| die("bad SR"));
+    let k: f64 = args[3].parse().unwrap_or_else(|_| die("bad K"));
+    if ch == 0 || sr == 0 || !(k > 0.0) {
+        die("bad arguments");
+    }
+    let mut st = signalsmith_stretch::Stretch::preset_default(ch as u32, sr);
+    // output sample j holds input time j / K once these leading samples are dropped
+    let mut skip = (st.input_latency() as f64 * k).round() as u64 + st.output_latency() as u64;
+    let mut out = Rf64::create(&args[0], ch, sr);
+    const B: usize = 4096;
+    let mut stdin = std::io::stdin().lock();
+    let mut bytes = vec![0u8; B * ch * 4];
+    let mut x = vec![0f32; B * ch];
+    let mut y: Vec<f32> = Vec::new();
+    let (mut fed, mut made) = (0u64, 0u64); // frames into the stretcher (zeros included), out
+    let mut want = u64::MAX;                  // round(N * K), known at EOF
+    while out.frames < want {
+        let frames = if want == u64::MAX { read_full(&mut stdin, &mut bytes) / (4 * ch) } else { 0 };
+        for (v, b) in x.iter_mut().zip(bytes[..frames * ch * 4].chunks_exact(4)) {
+            *v = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        }
+        if frames < B {
+            if want == u64::MAX {
+                want = ((fed + frames as u64) as f64 * k).round() as u64;
+            }
+            // past the end: zeros push the tail out of the stretcher
+            x[frames * ch..].iter_mut().for_each(|v| *v = 0.0);
+        }
+        fed += B as u64;
+        let n = ((fed as f64 * k).floor() as u64 - made) as usize;
+        made += n as u64;
+        y.resize(n * ch, 0.0);
+        st.process(&x, &mut y);
+        let s = skip.min(n as u64) as usize;
+        skip -= s as u64;
+        let keep = (n - s).min((want - out.frames).min(n as u64) as usize);
+        out.write(&y[s * ch..(s + keep) * ch]);
+    }
+    out.finish();
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("wsola") => wsola(&args[2..]),
+        #[cfg(feature = "signalsmith")]
+        Some("stretch") => stretch(&args[2..]),
         Some("--version") => println!("lls-dsp {}", env!("CARGO_PKG_VERSION")),
         _ => die("usage: lls-dsp wsola ..."),
     }

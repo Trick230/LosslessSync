@@ -1,0 +1,4 @@
+# signalsmith-stretch (feature "signalsmith") is C++: build.rs links its runtime statically,
+# so cc must not add the libstdc++ DLL
+[env]
+CXXSTDLIB = ""

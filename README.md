@@ -57,6 +57,18 @@ pieces touch get a 4 ms splice guard.
 
   Then pass `--ext-python .venv-sep\Scripts\python.exe` (or set `LOSSLESSSYNC_EXT_PYTHON`).
 
+  With `lls-dsp` built with `--features signalsmith`, the helper stretches the rest while
+  the GPU is still separating the vocals, instead of afterwards (T05E01: 151 s -> 115-139 s;
+  a 2-episode batch: 250 s -> 200 s, and it no longer holds the whole residual in memory).
+  That feature compiles Signalsmith Stretch (C++), so it needs a C++ compiler and libclang;
+  on Windows with the Rust GNU toolchain, a WinLibs GCC with LLVM works:
+
+  ```
+  set PATH=C:\path\to\mingw64\bin;%PATH%
+  set LIBCLANG_PATH=C:\path\to\mingw64\bin
+  cd rust && cargo build --release --features signalsmith
+  ```
+
 ## Installation
 
 ```
