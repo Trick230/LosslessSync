@@ -129,8 +129,8 @@ Or `python -m losslesssync gui`.
 | `--src-track N` | auto | Source audio track (`a:N`) |
 | `--speed` | `auto` | `auto`, `pal`, `1`, or an exact ratio such as `1001/960` |
 | `--pitch` | `auto` | `auto`, `resample`, `tempo` or `keep` (cut on the resampled source, render it time-stretched so the original PAL pitch is kept on the film timing) |
-| `--keep-engine` | `wsola` | stretcher for `--pitch keep`: `wsola` (built in; no phase-vocoder smearing, timing error bounded by `--wsola-max-ms`) `rubberband` (R3), or `stems`: the vocals are separated (RoFormer, GPU) and stretched with WSOLA, the rest with Signalsmith Stretch, then summed; the two always add back to the source |
-| `--ext-python` | `$LOSSLESSSYNC_EXT_PYTHON` | Python with `audio-separator` and `python-stretch`, for `stems` |
+| `--keep-engine` | `auto` | stretcher for `--pitch keep` (`auto`: `stems` when `--ext-python` or `LOSSLESSSYNC_EXT_PYTHON` is set, else `wsola`): `wsola` (built in; no phase-vocoder smearing, timing error bounded by `--wsola-max-ms`) `rubberband` (R3), or `stems`: the vocals are separated (RoFormer, GPU) and stretched with WSOLA, the rest with Signalsmith Stretch, then summed; the two always add back to the source |
+| `--ext-python` | `$LOSSLESSSYNC_EXT_PYTHON`, else this Python | Python with `audio-separator` and `python-stretch`, for `stems` |
 | `--sep-model` | `vocals_mel_band_roformer.ckpt` | Vocals model for `stems` |
 | `--sep-model-dir` | `~/.cache/losslesssync/models` | Where separation models are stored (downloaded on first use) |
 | `--wsola-tol-ms` | `5` | WSOLA search tolerance: events stay within this of their exact place |
