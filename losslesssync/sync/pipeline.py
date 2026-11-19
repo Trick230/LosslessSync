@@ -84,15 +84,17 @@ class Log:
 
 
 def verify_window(ref16: np.ndarray, out16: np.ndarray, t: float, win: float = 6.0,
-                  sub: float = 3.0) -> float | None:
+                  sub: float = 3.0, off: float = 0.0) -> float | None:
     """Timing error (s) of out16 against ref16 over [t, t + win], or None. One correlation
     can lock onto a wrong peak (periodic music, the other language's dialogue: up to ~100 ms
     on a perfectly placed track), so the whole window and three overlapping halves are
-    measured and only an error that at least three of them agree on is kept."""
-    rs = [segments.fine_measure(ref16, out16, t, 0.0, win, max_lag=0.1)]
-    rs += [segments.fine_measure(ref16, out16, u, 0.0, sub, max_lag=0.1)
+    measured and only an error that at least three of them agree on is kept. out16 is
+    placed at ref time - off."""
+    oq = round(off * ANA_SR) / ANA_SR     # on the sample grid: the windows are cut exactly
+    rs = [segments.fine_measure(ref16, out16, t, oq, win, max_lag=0.1)]
+    rs += [segments.fine_measure(ref16, out16, u, oq, sub, max_lag=0.1)
            for u in np.linspace(t, t + win - sub, 3)]
-    v = [r[0] for r in rs if r is not None]
+    v = [r[0] - off for r in rs if r is not None]
     best = []
     for c in v:
         g = [x for x in v if abs(x - c) <= max(0.001, 0.1 * abs(c))]
@@ -102,9 +104,23 @@ def verify_window(ref16: np.ndarray, out16: np.ndarray, t: float, win: float = 6
 
 
 def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float = 6.0,
-           step: float = 5.0) -> dict:
-    ts = [t for p in pieces for t in np.arange(p["start"] + 1.0, p["end"] - 1.0 - win + 1e-9, step)]
+           step: float = 5.0, rest16: np.ndarray | None = None) -> dict:
+    """rest16: the source without its vocals, in the pieces' source timing (offset). Where
+    the reference's dialogue (another language) hides the shared sound, the windows the
+    mix could not measure are measured again on it."""
+    tp = [(t, p) for p in pieces
+          for t in np.arange(p["start"] + 1.0, p["end"] - 1.0 - win + 1e-9, step)]
+    ts = [t for t, _ in tp]
     res = pmap(lambda t: verify_window(ref16, out16, t, win), ts)
+    n_rest = 0
+    if rest16 is not None:
+        miss = [i for i, r in enumerate(res) if r is None]
+        alt = pmap(lambda i: verify_window(ref16, rest16, tp[i][0], win,
+                                           off=tp[i][1]["offset"]), miss)
+        for i, r in zip(miss, alt):
+            if r is not None:
+                res[i] = r
+                n_rest += 1
     # window centre and signed error (ms), None where nothing could be measured
     points = [[round(float(t) + win / 2, 3), None if r is None else round(r * 1000, 4)]
               for t, r in zip(ts, res)]
@@ -112,7 +128,8 @@ def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float 
     if not errs:
         return {"windows": len(ts), "measured": 0, "points": points}
     e = np.abs(np.array(errs)) * 1000
-    return {"windows": len(ts), "measured": len(errs), "points": points,
+    extra = {"measured_on_rest": n_rest} if rest16 is not None else {}
+    return {"windows": len(ts), "measured": len(errs), "points": points, **extra,
             "median_abs_ms": float(np.median(e)), "p95_abs_ms": float(np.percentile(e, 95)),
             "max_abs_ms": float(e.max()), "within_1ms_pct": float((e <= 1.0).mean() * 100)}
 
@@ -319,9 +336,10 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
                     if opt.match_loudness else None)     # while the source is stretched
         pool.shutdown(wait=False)
         try:
+            rest16 = None
             if opt.pitch == "keep" and abs(k - 1) > 1e-4:
-                inter_wav = keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report,
-                                       opt, split)
+                inter_wav, rest16 = keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log,
+                                               report, opt, split)
             info = read_info(inter_wav)
         except BaseException:
             if ref_loud:                  # do not leave its ffmpeg running behind the error
@@ -344,12 +362,15 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         prog("verify", 0.0)
         out_st = media.audio_streams(out_wav)[0]
         out16 = media.decode_mono(out_wav, out_st, ANA_SR)
-        report["verify"] = verify(ref16, out16, pieces)
+        report["verify"] = verify(ref16, out16, pieces, rest16=rest16)
+        del rest16
         v = report["verify"]
         if v.get("measured"):
-            log(f"  {v['measured']}/{v['windows']} windows measured: median {v['median_abs_ms']:.3f} ms, "
-                f"p95 {v['p95_abs_ms']:.3f} ms, max {v['max_abs_ms']:.3f} ms, "
-                f"{v['within_1ms_pct']:.1f}% within 1 ms")
+            on_rest = (f" ({v['measured_on_rest']} on the source without its vocals)"
+                       if v.get("measured_on_rest") else "")
+            log(f"  {v['measured']}/{v['windows']} windows measured{on_rest}: median "
+                f"{v['median_abs_ms']:.3f} ms, p95 {v['p95_abs_ms']:.3f} ms, "
+                f"max {v['max_abs_ms']:.3f} ms, {v['within_1ms_pct']:.1f}% within 1 ms")
         um = unmeasured_spans(v["points"])
         if um:
             log(f"  not measurable (too little shared sound): {len(um)} stretch(es), "
@@ -441,9 +462,12 @@ def stretch_latency(inter16, x16, step=5.0):
     return float(np.median(off)), t, off
 
 
-def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, split=None) -> str:
+def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, split=None):
     """Stretch the source to the film timing keeping its pitch (WSOLA or Rubber Band R3) and
-    shift the pieces by the stretcher's latency, measured against the resampled source."""
+    shift the pieces by the stretcher's latency, measured against the resampled source.
+    Returns the stretched WAV and, with stems, the analysis copy of everything but the
+    vocals in its timing (for verify), else None."""
+    rest16 = None
     keep_wav = os.path.join(tmp, "keep.wav")
     if opt.keep_engine == "stems":
         log("time-stretching source keeping its pitch (separated stems)...")
@@ -469,10 +493,7 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, spli
         # instead of decoding keep.wav again; the other stems get their fractional shift
         # exactly (band-limited, in the frequency domain)
         n16 = int(round(n_out * ANA_SR / src_st.sample_rate))
-        v16 = dec.pop(voc_k)
-        keep16 = np.zeros(n16, np.float32)
-        keep16[:min(n16, len(v16))] += v16[:n16]
-        del v16
+        rest16 = np.zeros(n16, np.float32)
         for (p, _), shift in zip(others, shifts):
             r16 = dec.pop(p, None)
             if r16 is None:                   # not decoded when its measurement failed
@@ -482,8 +503,12 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, spli
             R16 = sp_fft.rfft(r16, nf, workers=-1)
             del r16
             R16 *= np.exp(-2j * np.pi * np.fft.rfftfreq(nf) * d)
-            keep16 += sp_fft.irfft(R16, nf, workers=-1)[:n16].astype(np.float32)
+            rest16 += sp_fft.irfft(R16, nf, workers=-1)[:n16].astype(np.float32)
             del R16
+        v16 = dec.pop(voc_k)
+        keep16 = rest16.copy()
+        keep16[:min(n16, len(v16))] += v16[:n16]
+        del v16
     elif opt.keep_engine == "wsola":
         log(f"time-stretching source keeping its pitch (WSOLA, +-{opt.wsola_tol_ms:g} ms, "
             f"up to +-{opt.wsola_max_ms:g} ms)...")
@@ -509,7 +534,7 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, spli
     report["stretch_mode"] = "keep"
     for p in pieces:
         p["offset"] += lat
-    return keep_wav
+    return keep_wav, rest16
 
 
 def log_segments(log, report):
