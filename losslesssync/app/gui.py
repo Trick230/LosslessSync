@@ -8,8 +8,8 @@ import tkinter as tk
 import traceback
 from tkinter import filedialog, messagebox, ttk
 
-from . import media
-from .pipeline import Options, fmt_t, sync
+from ..audio import media
+from ..sync.pipeline import Options, fmt_t, sync
 
 # weight of each pipeline stage in the overall progress bar (start fraction, span)
 STAGES = {"decode": (0.00, 0.10), "speed": (0.10, 0.05), "anchors": (0.15, 0.30),

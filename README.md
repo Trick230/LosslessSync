@@ -194,6 +194,17 @@ Or `python -m losslesssync gui`.
 7. **Render.** Pieces are copied from the speed-corrected source at their offsets, with fades
    at gaps. The result is then measured against the reference and encoded.
 
+### Source layout
+
+| Path | What is there |
+|---|---|
+| `losslesssync/app/` | Command line, GUI, batch mode, HTML report |
+| `losslesssync/sync/` | `pipeline` (the steps above), `features`, `speed` (speed, anchors, pitch mode), `segments` (fine offsets, drift), `gaps` (dropouts, muted spans), `cuts` (cut points) |
+| `losslesssync/audio/` | ffmpeg decoding and encoding, WAV I/O, rendering |
+| `losslesssync/stretch/` | Pitch-keeping stretchers: WSOLA, PSOLA, separated stems and their helper (`ext`), the native kernels (`native`) |
+| `rust/` | `lls-dsp`, the native WSOLA/PSOLA/HPSS/Signalsmith kernels |
+| `tools/` | Synthetic test material, checks and stretch-quality scoring |
+
 ## Output and report
 
 The log lists:
@@ -213,17 +224,24 @@ window, and the tables.
 
 ## Testing
 
-`tests/make_synth.py` builds synthetic material with known ground truth. `tests/check.py`
+`tools/make_synth.py` builds synthetic material with known ground truth. `tools/check.py`
 compares a result against it. The variants are `pal`, `tempo` and `none`, and `--dropouts`
-adds a series of lost and muted dropouts.
+adds a series of lost and muted dropouts. `tools/run_synth.py` runs all six cases (each
+variant with and without dropouts) end to end and prints PASS/FAIL per case:
 
 ```
-python tests/make_synth.py test_out/pal --variant pal
+python tools/run_synth.py [test_out] [--cases pal,drop_pal]
+```
+
+One case by hand:
+
+```
+python tools/make_synth.py test_out/pal --variant pal
 losslesssync sync --ref test_out/pal/ref.mka --src test_out/pal/tv.ts -o test_out/pal/out.flac --report test_out/pal/report.json
-python tests/check.py test_out/pal
+python tools/check.py test_out/pal
 ```
 
-`tests/stretch_quality.py SOURCE [engine ...]` scores the artefacts of the pitch-keeping
+`tools/stretch_quality.py SOURCE [engine ...]` scores the artefacts of the pitch-keeping
 stretchers (`wsola[:tol[:frame_ms[:key=value...]]]`, `rubberband`, `signalsmith`, `atempo`): four
 excerpts are stretched and stretched back, and the round trip is compared with the
 original on a log-mel spectrogram, forgiving +-10 ms of displacement. Lower is better.

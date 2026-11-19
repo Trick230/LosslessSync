@@ -18,7 +18,7 @@ def dsp() -> str | None:
     env = os.environ.get("LOSSLESSSYNC_DSP", "")
     if env.lower() in ("off", "0", "no"):
         return None
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     for cand in (env, os.path.join(root, "rust", "target", "release", _EXE), shutil.which(_EXE)):
         if cand and os.path.isfile(cand):
             return cand

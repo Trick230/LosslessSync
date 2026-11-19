@@ -14,7 +14,7 @@ import numpy as np
 from scipy.signal import fftconvolve
 
 from . import native
-from .wavio import WavWriter, read_info
+from ..audio.wavio import WavWriter, read_info
 
 
 def stretch(in_wav: str, out_wav: str, k: float, tol_ms: float = 5.0,

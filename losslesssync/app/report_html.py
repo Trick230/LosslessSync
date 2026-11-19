@@ -148,7 +148,7 @@ def review_items(r: dict, p95_ms: float = 1.0) -> list[str]:
     if "verify" in r and not v.get("measured"):
         out.append("<b class=warn>not verified</b>: no window could be measured")
     else:
-        from .pipeline import unmeasured_spans
+        from ..sync.pipeline import unmeasured_spans
         for a, b in unmeasured_spans(v.get("points") or []):
             if b - a >= 15:
                 out.append(f"<b class=warn>not measured</b> {_t(a)} - {_t(b)}: too little "

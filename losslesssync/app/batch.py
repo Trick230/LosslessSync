@@ -14,8 +14,10 @@ import traceback
 import unicodedata
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from . import media, report_html, stems
-from .pipeline import Options, sync, uses_stems
+from ..audio import media
+from ..stretch import stems
+from . import report_html
+from ..sync.pipeline import Options, sync, uses_stems
 
 MEDIA_EXT = {".mkv", ".m2ts", ".mts", ".ts", ".mp4", ".m4v", ".mka", ".wav", ".w64", ".flac",
              ".ac3", ".eac3", ".ec3", ".dts", ".thd", ".m4a", ".aac", ".opus", ".mp2", ".mpg"}

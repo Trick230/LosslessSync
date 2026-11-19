@@ -1,6 +1,6 @@
 """Compare a sync result with the synthetic ground truth.
 
-usage: python tests/check.py CASE_DIR  (expects truth.json, report.json, ideal.wav, out.flac)
+usage: python tools/check.py CASE_DIR  (expects truth.json, report.json, ideal.wav, out.flac)
 exit code 0 when cut points are within 60 ms and timing error is under 0.1 ms
 (tempo variant: time-stretching is not sample-exact, so 150 ms / median 0.5 ms / max 5 ms).
 """
@@ -13,7 +13,8 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from losslesssync import align, media  # noqa: E402
+from losslesssync.audio import media
+from losslesssync.sync import speed  # noqa: E402
 
 
 def main():
@@ -43,7 +44,7 @@ def main():
     for s in truth["segments"]:
         t = s["ref_start"] + 1
         while t + 4 < s["ref_end"] - 1:
-            d_, conf = align.gcc_phat(ideal[int(t * 16000):int((t + 4) * 16000)],
+            d_, conf = speed.gcc_phat(ideal[int(t * 16000):int((t + 4) * 16000)],
                                       out[int(t * 16000):int((t + 4) * 16000)], 16000, 0.05)
             if conf > 7:
                 errs.append(abs(d_) * 1000)

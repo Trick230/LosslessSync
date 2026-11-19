@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from scipy import fft as sfft
@@ -112,3 +113,23 @@ def frame_rms_db(x: np.ndarray, sr: int, hop_s: float) -> np.ndarray:
         return np.zeros(0)
     p = (x[:n * hop].reshape(n, hop).astype(np.float64) ** 2).mean(axis=1)
     return 10 * np.log10(p + 1e-20)
+
+
+_POOL = None
+
+
+def pmap(fn, items) -> list:
+    """fn over items on all cores, results in order. The work is FFT/numpy, which runs
+    without the GIL; each task keeps its FFTs single-threaded to avoid oversubscription."""
+    global _POOL
+    items = list(items)
+    if len(items) < 4 or getattr(_TLS, "in_pool", False):
+        return [fn(x) for x in items]   # nested: already on a pool thread
+    if _POOL is None:
+        _POOL = ThreadPoolExecutor(max_workers=n_threads())
+
+    def run(x):
+        _TLS.in_pool = True
+        return fn(x)
+
+    return list(_POOL.map(run, items))

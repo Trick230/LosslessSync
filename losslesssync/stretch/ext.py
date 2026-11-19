@@ -1,7 +1,7 @@
 """Helpers that run in a separate Python with the heavy optional packages.
 
-    python -m losslesssync.ext stretch IN OUT K     Signalsmith Stretch (python-stretch)
-    python -m losslesssync.ext separate IN VOCALS REST_K MODEL MODEL_DIR [STRETCH_OPTS...]
+    python -m losslesssync.stretch.ext stretch IN OUT K     Signalsmith Stretch (python-stretch)
+    python -m losslesssync.stretch.ext separate IN VOCALS REST_K MODEL MODEL_DIR [STRETCH_OPTS...]
                                                     vocals stem (audio-separator's RoFormer,
                                                     GPU); reads K from stdin and stretches
                                                     the residual IN - VOCALS with

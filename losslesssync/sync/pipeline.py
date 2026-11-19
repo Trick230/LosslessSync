@@ -14,10 +14,13 @@ from fractions import Fraction
 import numpy as np
 from scipy import fft as sp_fft
 
-from . import align, media, report_html, stems, wavio, wsola
-from .features import ANA_SR, features
-from .render import render
-from .wavio import read_info
+from ..app import report_html
+from ..audio import media, wavio
+from ..audio.render import render
+from ..audio.wavio import read_info
+from ..stretch import stems, wsola
+from . import cuts, gaps, segments, speed
+from .features import ANA_SR, features, pmap
 
 SPEED_ALIASES = {"pal": 1001 / 960, "pal24": 25 / 24, "ntsc": 960 / 1001, "1": 1.0, "none": 1.0}
 
@@ -86,8 +89,8 @@ def verify_window(ref16: np.ndarray, out16: np.ndarray, t: float, win: float = 6
     can lock onto a wrong peak (periodic music, the other language's dialogue: up to ~100 ms
     on a perfectly placed track), so the whole window and three overlapping halves are
     measured and only an error that at least three of them agree on is kept."""
-    rs = [align.fine_measure(ref16, out16, t, 0.0, win, max_lag=0.1)]
-    rs += [align.fine_measure(ref16, out16, u, 0.0, sub, max_lag=0.1)
+    rs = [segments.fine_measure(ref16, out16, t, 0.0, win, max_lag=0.1)]
+    rs += [segments.fine_measure(ref16, out16, u, 0.0, sub, max_lag=0.1)
            for u in np.linspace(t, t + win - sub, 3)]
     v = [r[0] for r in rs if r is not None]
     best = []
@@ -101,7 +104,7 @@ def verify_window(ref16: np.ndarray, out16: np.ndarray, t: float, win: float = 6
 def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float = 6.0,
            step: float = 5.0) -> dict:
     ts = [t for p in pieces for t in np.arange(p["start"] + 1.0, p["end"] - 1.0 - win + 1e-9, step)]
-    res = align.pmap(lambda t: verify_window(ref16, out16, t, win), ts)
+    res = pmap(lambda t: verify_window(ref16, out16, t, win), ts)
     # window centre and signed error (ms), None where nothing could be measured
     points = [[round(float(t) + win / 2, 3), None if r is None else round(r * 1000, 4)]
               for t, r in zip(ts, res)]
@@ -179,29 +182,29 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     if forced is None:
         log("detecting speed ratio...")
         prog("speed", 0.0)
-        k, speed_scores = align.detect_speed(src16, R, log)
+        k, speed_scores = speed.detect_speed(src16, R, log)
     else:
         k, speed_scores = forced, {}
     log(f"  using x{k:.7f} for anchor search")
 
     log("matching anchors over the whole reference...")
     S = features(src16, speed=k)
-    act = align.active_mask(src16, len(S), k)
-    anchors = align.find_anchors(S, R, k, act, opt.chunk_s, opt.step_s,
+    act = speed.active_mask(src16, len(S), k)
+    anchors = speed.find_anchors(S, R, k, act, opt.chunk_s, opt.step_s,
                                  progress=lambda f: prog("anchors", f))
-    n_conf = sum(align.is_confident(a) for a in anchors)
+    n_conf = sum(speed.is_confident(a) for a in anchors)
     log(f"  {len(anchors)} anchors, {n_conf} confident")
     if n_conf < 2:
         raise media.MediaError("could not find matching content between the two tracks")
     del S
 
     if forced is None:
-        k_ref, snapped = align.refine_speed(anchors, k)
+        k_ref, snapped = speed.refine_speed(anchors, k)
         log(f"  speed refined to x{k_ref:.7f}" + (" (exact ratio)" if snapped else ""))
         k = k_ref
 
     if opt.pitch == "auto":
-        mode, pitch_info = align.detect_pitch_mode(ref16, src16, anchors, k, opt.chunk_s)
+        mode, pitch_info = speed.detect_pitch_mode(ref16, src16, anchors, k, opt.chunk_s)
         if abs(k - 1) > 1e-4:
             log(f"  pitch: {'speed-up with pitch shift -> resample' if mode == 'resample' else 'pitch already corrected -> time-stretch'}"
                 f" (shift {pitch_info.get('best_shift_bins')} bins, "
@@ -223,17 +226,17 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         log(f"speed-correcting source (x{k:.7f}, {mode})...")
         prog("correct", 0.0)
         inter16 = media.make_intermediate(src_path, src_st, k, mode, inter_wav, ANA_SR)
-        segs = align.build_segments(anchors, k, opt.chunk_s)
+        segs = segments.build_segments(anchors, k, opt.chunk_s)
         log(f"  {len(segs)} segments; refining offsets (GCC-PHAT)...")
-        align.fine_segments(segs, ref16, inter16, k, opt.chunk_s,
-                            progress=lambda f: prog("fine", f))
-        slope, n, span = align.residual_drift(segs)
+        segments.fine_segments(segs, ref16, inter16, k, opt.chunk_s,
+                               progress=lambda f: prog("fine", f))
+        slope, n, span = segments.residual_drift(segs)
         log(f"  residual drift {slope * 1e6:+.2f} ppm over {n} windows")
         if forced is None and abs(slope) > 1e-6 and n >= 6 and span >= 60 and it < 2:
             k *= 1 + slope
             continue
         break
-    segs = align.split_on_jumps(segs, k, opt.chunk_s)
+    segs = segments.split_on_jumps(segs, k, opt.chunk_s)
     dropped = [s for s in segs if s.method == "coarse" and len(s.anchors) < 4]
     # an unconfirmed segment whose offset is close to a confirmed neighbour's is that
     # neighbour mis-measured in a weak passage (e.g. dialogue only); let it extend instead
@@ -252,26 +255,26 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         log(f"  dropped {len(dropped)} unconfirmed segment(s)")
     if not segs:
         raise media.MediaError("no segment could be confirmed by fine alignment")
-    segs = align.merge_equal(segs, k, opt.chunk_s)
+    segs = segments.merge_equal(segs, k, opt.chunk_s)
 
     log("placing cut points...")
     Rb = features(ref16, hp_s=0.15)
     Sb = features(inter16, hp_s=0.15)
-    segs = align.split_on_dropouts(segs, ref16, inter16, Rb, Sb, k, opt.chunk_s, ref_dur,
-                                   progress=lambda f: prog("dropouts", f))
-    segs = align.merge_equal(segs, k, opt.chunk_s)
-    segs = align.place_segments(segs, Rb, Sb, ref_dur, opt.chunk_s, k, ref16, inter16)
+    segs = gaps.split_on_dropouts(segs, ref16, inter16, Rb, Sb, k, opt.chunk_s, ref_dur,
+                                  progress=lambda f: prog("dropouts", f))
+    segs = segments.merge_equal(segs, k, opt.chunk_s)
+    segs = cuts.place_segments(segs, Rb, Sb, ref_dur, opt.chunk_s, k, ref16, inter16)
     del Rb, Sb
-    segs = align.refine_edges(segs, inter16, ref_dur, ref16)
+    segs = cuts.refine_edges(segs, inter16, ref_dur, ref16)
     pieces = [{"start": s.ref_start, "end": s.ref_end, "offset": s.offset} for s in segs]
-    drops = sorted(align.dropout_gaps(segs, ref16))
+    drops = sorted(gaps.dropout_gaps(segs, ref16))
     for i in drops:
         pieces[i]["fade_out_ms"] = opt.dropout_fade_ms
         pieces[i + 1]["fade_in_ms"] = opt.dropout_fade_ms
     dropouts = [{"start": segs[i].ref_end, "end": segs[i + 1].ref_start, "kind": "lost"}
                 for i in drops]
     dropouts += [{"start": a, "end": b, "kind": "muted"}
-                 for a, b in align.muted_spans(segs, ref16, inter16)]
+                 for a, b in gaps.muted_spans(segs, ref16, inter16)]
     dropouts.sort(key=lambda d: d["start"])
     if dropouts:
         log(f"  {len(dropouts)} signal dropout(s) in the recording:")
@@ -279,7 +282,7 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
             what = "audio lost" if d["kind"] == "lost" else "muted"
             log(f"    {fmt_t(d['start'])} - {fmt_t(d['end'])}  "
                 f"({(d['end'] - d['start']) * 1000:.0f} ms, {what})")
-    opening = None if opt.fade_opening else align.find_opening(segs, ref16, inter16, ref_dur)
+    opening = None if opt.fade_opening else cuts.find_opening(segs, ref16, inter16, ref_dur)
     if opening is not None:
         pieces[opening]["fade_in"] = False
         log(f"  opening titles at {fmt_t(segs[opening].ref_start)}: no fade-in")
@@ -430,7 +433,7 @@ def stretch_latency(inter16, x16, step=5.0):
     """Median offset of a pitch-kept stretch against the resampled source, with the windows."""
     dur = min(len(inter16), len(x16)) / ANA_SR
     ts = np.arange(10.0, dur - 16.0, step)
-    res = align.pmap(lambda t: align.fine_measure(inter16, x16, t, 0.0, 6.0, max_lag=0.2), ts)
+    res = pmap(lambda t: segments.fine_measure(inter16, x16, t, 0.0, 6.0, max_lag=0.2), ts)
     ok = [(t, r[0]) for t, r in zip(ts, res) if r is not None]
     if len(ok) < 10:
         raise media.MediaError("could not measure the time-stretch latency")

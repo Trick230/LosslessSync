@@ -8,7 +8,7 @@ t_max_ms of the exact stretched timeline (a period is forced past that).
 from __future__ import annotations
 
 from . import native
-from .wavio import WavWriter, read_info
+from ..audio.wavio import WavWriter, read_info
 
 
 def available() -> bool:

@@ -7,7 +7,7 @@ stretcher scores 0. 'mean' tracks overall colouring, 'p99' the worst frames (dou
 stutters, clicks). Lower is better; only differences between engines on the same
 material mean anything.
 
-    python tests/stretch_quality.py SOURCE [engine ...]
+    python tools/stretch_quality.py SOURCE [engine ...]
     engines: wsola[:tol[:frame_ms[:key=value...]]]  rubberband  signalsmith  atempo
 """
 from __future__ import annotations
@@ -21,8 +21,8 @@ import numpy as np
 from scipy.signal import stft
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from losslesssync import wsola  # noqa: E402
-from losslesssync.media import speed_filter  # noqa: E402
+from losslesssync.stretch import wsola  # noqa: E402
+from losslesssync.audio.media import speed_filter  # noqa: E402
 from losslesssync.wavio import read_info  # noqa: E402
 
 K = 1001 / 960
@@ -52,7 +52,7 @@ def run_engine(name: str, src: str, dst: str, k: float):
     elif kind == "signalsmith":  # needs python-stretch in $LOSSLESSSYNC_EXT_PYTHON
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
         subprocess.run([os.environ.get("LOSSLESSSYNC_EXT_PYTHON", sys.executable), "-m",
-                        "losslesssync.ext", "stretch", src, dst, repr(k)], check=True,
+                        "losslesssync.stretch.ext", "stretch", src, dst, repr(k)], check=True,
                        capture_output=True, env=dict(os.environ, PYTHONPATH=root))
     elif kind == "atempo":
         ffmpeg(["-i", src, "-af", f"atempo={1 / k:.12f}", "-c:a", "pcm_f32le", dst])

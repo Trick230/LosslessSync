@@ -10,10 +10,10 @@ requires-python = ">=3.10"
 dependencies = ["numpy", "scipy"]
 
 [project.scripts]
-losslesssync = "losslesssync.cli:main"
+losslesssync = "losslesssync.app.cli:main"
 
 [project.gui-scripts]
-losslesssync-gui = "losslesssync.gui:main"
+losslesssync-gui = "losslesssync.app.gui:main"
 
 [tool.setuptools]
-packages = ["losslesssync"]
+packages = ["losslesssync", "losslesssync.app", "losslesssync.sync", "losslesssync.audio", "losslesssync.stretch"]

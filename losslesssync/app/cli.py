@@ -5,8 +5,8 @@ import argparse
 import os
 import sys
 
-from . import media
-from .pipeline import Options, sync
+from ..audio import media
+from ..sync.pipeline import Options, sync
 
 
 def cmd_probe(args):
@@ -145,7 +145,7 @@ def main(argv=None):
 
 
     g = sub.add_parser("gui", help="open the graphical interface")
-    g.set_defaults(fn=lambda a: __import__("losslesssync.gui", fromlist=["main"]).main())
+    g.set_defaults(fn=lambda a: __import__("losslesssync.app.gui", fromlist=["main"]).main())
 
     args = p.parse_args(argv)
     try:

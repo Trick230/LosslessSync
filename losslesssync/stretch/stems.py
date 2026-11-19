@@ -17,18 +17,20 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
-from . import media, native, psola, wsola
-from .wavio import WavWriter, read_info
+from ..audio import media
+from ..audio.wavio import WavWriter, read_info
+from . import native, psola, wsola
 
 BLOCK = 1 << 20
 
 
 def _cmd(opt, *args):
-    return [opt.ext_python, "-m", "losslesssync.ext", *args]
+    return [opt.ext_python, "-m", "losslesssync.stretch.ext", *args]
 
 
 def _env():
-    return dict(os.environ, PYTHONPATH=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return dict(os.environ, PYTHONPATH=root)
 
 
 class Helper:

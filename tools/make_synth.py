@@ -1,6 +1,6 @@
 """Generate a synthetic Blu-ray reference + TV dub pair with known ground truth.
 
-usage: python tests/make_synth.py OUT_DIR [--variant pal|tempo|none] [--seed N] [--dropouts]
+usage: python tools/make_synth.py OUT_DIR [--variant pal|tempo|none] [--seed N] [--dropouts]
 
 --dropouts adds TV signal failures: lost audio (time skips) and muted stretches, several
 in a row, on top of the usual edits.
