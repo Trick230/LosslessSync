@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import numpy as np
 from scipy import fft as sfft
-from scipy.ndimage import uniform_filter1d
+from scipy.ndimage import binary_dilation, uniform_filter1d
 
 from .features import ANA_SR, _nw
 from .speed import DROPOUT_MAX_JUMP, HOP, NCC_REG
-from .segments import FLUX_HOP, Segment, onset_flux
+from .segments import FLUX_HOP, Segment, _flux_bands
 from .gaps import _energy_db, dropout_gaps
 
 # ---------------------------------------------------------------- cut points
@@ -261,42 +261,81 @@ def _splice_point(src16, s_t: float, search: float = 0.5, smooth: float = 0.01,
     return s_t - search + i * step
 
 
-def _locate_skip(ref16, src16, A: Segment, B: Segment, span: float = 1.5):
-    """Place a lost-audio gap (B.offset - A.offset long, source continuous across it) at
-    1 ms: onset flux of the ref against the source at A's offset before the cut and at
-    B's offset after it. Works without phase coherence (time-stretched sources)."""
+def _level_feat(x: np.ndarray, n_fft: int = 1024, n_bands: int = 32, hp: int = 50,
+                dead_db: float = -70.0):
+    """Log band levels at 1 ms hop, high-passed in time (hp frames) and z-scored per band;
+    frames near digital silence (muted audio) are zeroed so they carry no evidence."""
+    n = (len(x) - n_fft) // FLUX_HOP + 1
+    if n < hp * 2:
+        return None
+    win, W = _flux_bands(n_fft, n_bands)
+    frames = np.lib.stride_tricks.sliding_window_view(np.asarray(x, np.float32),
+                                                      n_fft)[::FLUX_HOP][:n]
+    mag = np.abs(sfft.rfft(frames * win, axis=1, workers=_nw()))
+    e = 10 * np.log10((mag ** 2).sum(1) / ((win ** 2).sum() * n_fft) + 1e-20)
+    dead = binary_dilation(e < dead_db, np.ones(hp + 1, bool))
+    B = np.log(mag @ W + 1e-4).T
+    B -= uniform_filter1d(B, hp, axis=1, mode="nearest")
+    B[:, dead] = 0
+    if dead.all():
+        return B
+    B /= B[:, ~dead].std(1, keepdims=True) + 1e-9
+    return np.clip(B, -3, 3)
+
+
+def _locate_switch(ref16, src16, A: Segment, B: Segment, g: float, span: float = 1.5,
+                   ctx: float = 4.0) -> bool:
+    """Place the switch from A to B at 1 ms, with a ref gap of g s between them (a lost-audio
+    skip: g = B.offset - A.offset; extra source material such as an ad: g = 0): band levels
+    of the ref against the source at A's offset before the cut and at B's offset after it.
+    Works without phase coherence (time-stretched sources). Bands are weighted by how well ref and source agree in the context on both sides, which mutes
+    the bands where only the dialogue (different language) lives."""
     sr = ANA_SR
-    g = B.offset - A.offset
     lo = max(A.ref_start + 0.1, A.ref_end - span)
     hi = min(B.ref_end - 0.1, B.ref_start + span)
     if hi - lo < g + 0.2:
-        return
-    n = int((hi - lo) * sr)
-    i_r = int(round(lo * sr))
-    i_a = int(round((lo - A.offset) * sr))
-    i_b = int(round((lo - B.offset) * sr))
-    if min(i_r, i_a, i_b) < 0 or max(i_r, i_a, i_b) + n > min(len(ref16), len(src16)):
-        return
+        return False
     # with phase coherence the placement cut (coherence similarity) is already exact
     f0, f1 = int(round(lo / HOP)), int(round(hi / HOP))
     h = (f1 - f0) // 2
     coh = np.concatenate([coherence_sim(ref16, src16, A.offset, f0, f0 + h),
                           coherence_sim(ref16, src16, B.offset, f1 - h, f1)])
     if np.median(coh) >= 0.15:
-        return
-    Fr = onset_flux(ref16[i_r:i_r + n])
-    pa = (Fr * onset_flux(src16[i_a:i_a + n])).sum(0)
-    pb = (Fr * onset_flux(src16[i_b:i_b + n])).sum(0)
+        return False
+    L0 = max(A.ref_start, lo - ctx, A.offset, B.offset, 0.0)
+    L1 = min(B.ref_end, hi + ctx, len(ref16) / sr, len(src16) / sr + min(A.offset, B.offset))
+    if L0 > lo or L1 < hi:
+        return False
+    n = int((L1 - L0) * sr)
+    i_r = int(round(L0 * sr))
+    i_a = int(round((L0 - A.offset) * sr))
+    i_b = int(round((L0 - B.offset) * sr))
+    if min(i_r, i_a, i_b) < 0 or i_r + n > len(ref16) or max(i_a, i_b) + n > len(src16):
+        return False
+    Fr, Fa, Fb = (_level_feat(v[i:i + n]) for v, i in ((ref16, i_r), (src16, i_a), (src16, i_b)))
+    if Fr is None or Fa is None or Fb is None:
+        return False
+    k0 = int(round((lo - L0) * sr / FLUX_HOP))
+    k1 = int(round((hi - L0) * sr / FLUX_HOP))
+    w = np.ones(len(Fr), np.float32)
+    if k0 > 500 or Fr.shape[1] - k1 > 500:   # >= 0.5 s of context
+        agree = (Fr[:, :k0] * Fa[:, :k0]).sum(1) + (Fr[:, k1:] * Fb[:, k1:]).sum(1)
+        if agree.max() > 0:
+            w = np.maximum(agree, 0)
+    w /= w.sum()
+    pa = w @ (Fr[:, k0:k1] * Fa[:, k0:k1])
+    pb = w @ (Fr[:, k0:k1] * Fb[:, k0:k1])
     PA = np.concatenate([[0.0], np.cumsum(pa)])
     PB = np.concatenate([[0.0], np.cumsum(pb)])
     gf = int(round(g * sr / FLUX_HOP))
     c = np.arange(0, len(pa) - gf + 1)
     if len(c) == 0:
-        return
+        return False
     score = PA[c] + PB[-1] - PB[c + gf]
     j = int(c[np.argmax(score)])
-    t = lo + (j * FLUX_HOP + 128) / sr   # frame centre (n_fft 256)
+    t = L0 + ((k0 + j) * FLUX_HOP + 512) / sr   # frame centre (n_fft 1024)
     A.ref_end, B.ref_start = t, t + g
+    return True
 
 
 def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float,
@@ -311,9 +350,22 @@ def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float,
     drops = dropout_gaps(segs, ref16) if ref16 is not None else set()
     split = {("end", i) for i in drops} | {("start", i + 1) for i in drops}
     for i in sorted(drops):
-        _locate_skip(ref16, src16, segs[i], segs[i + 1])
+        _locate_switch(ref16, src16, segs[i], segs[i + 1], segs[i + 1].offset - segs[i].offset)
     for i, (a, b) in enumerate(zip(segs, segs[1:])):
         if i in drops:
+            continue
+        # Extra source material between two ref-adjacent segments (ad, inserted scene)
+        if (ref16 is not None and b.offset < a.offset and b.ref_start - a.ref_end < 0.05
+                and _locate_switch(ref16, src16, a, b, 0.0)):
+            # the matched evidence can be blind for a few hundred ms; a level step in the
+            # source (silence around the inserted material) pins the edit exactly
+            t = a.ref_end
+            steps = [(_snap(src16, t - b.offset, "start", search=0.5), b.offset),
+                     (_snap(src16, t - a.offset, "end", search=0.5), a.offset)]
+            steps = [x + o for x, o in steps if x is not None]
+            if steps:
+                a.ref_end = b.ref_start = min(steps, key=lambda u: abs(u - t))
+            split.update((("end", i), ("start", i + 1)))
             continue
         # Source runs on across the cut: the TV edit is somewhere in it, and the ref gap
         # does not say where, so look wider for the splice and cut both edges there.
@@ -322,6 +374,9 @@ def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float,
             t = _splice_point(src16, 0.5 * (s_a + s_b))
             if t is not None:
                 a.ref_end, b.ref_start = t + a.offset, t + b.offset
+                split.update((("end", i), ("start", i + 1)))
+            elif ref16 is not None and _locate_switch(ref16, src16, a, b, b.offset - a.offset):
+                # hard splice with no dip (time-stretched source): matched band levels
                 split.update((("end", i), ("start", i + 1)))
     for i, s in enumerate(segs):
         prev = segs[i - 1] if i > 0 else None
