@@ -2,8 +2,10 @@
 
 usage: python tools/run_synth.py [OUT_ROOT] [--cases pal,tempo,none,drop_pal,...]
 
-Cases: pal, tempo, none and drop_<variant> (the same with TV signal dropouts). Each runs
-make_synth.py, `losslesssync sync` and check.py; exit code 0 when every case passes.
+Cases: pal, tempo, none (the TV speed-up), drop_<variant> (with TV signal dropouts), ad,
+recap, intro (an ad break, a recap at the start, a different intro), mono and surround
+(TV layouts). Each runs make_synth.py, `losslesssync sync` and check.py; exit code 0 when
+every case passes.
 """
 from __future__ import annotations
 
@@ -14,16 +16,23 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-CASES = ["pal", "tempo", "none", "drop_pal", "drop_tempo", "drop_none"]
+CASES = {
+    "pal": ["--variant", "pal"], "tempo": ["--variant", "tempo"], "none": ["--variant", "none"],
+    "drop_pal": ["--variant", "pal", "--dropouts"],
+    "drop_tempo": ["--variant", "tempo", "--dropouts"],
+    "drop_none": ["--variant", "none", "--dropouts"],
+    "ad": ["--variant", "pal", "--ad"], "recap": ["--variant", "pal", "--recap"],
+    "intro": ["--variant", "pal", "--intro"],
+    "mono": ["--variant", "pal", "--channels", "1"],
+    "surround": ["--variant", "none", "--channels", "6"],
+}
 
 
 def run_case(out_root: str, case: str) -> bool:
     d = os.path.join(out_root, case)
-    variant = case.removeprefix("drop_")
     env = dict(os.environ, PYTHONPATH=ROOT + os.pathsep + os.environ.get("PYTHONPATH", ""))
     py = sys.executable
-    subprocess.run([py, os.path.join(HERE, "make_synth.py"), d, "--variant", variant]
-                   + (["--dropouts"] if case.startswith("drop_") else []), check=True, env=env)
+    subprocess.run([py, os.path.join(HERE, "make_synth.py"), d, *CASES[case]], check=True, env=env)
     log = os.path.join(d, "sync.log")
     with open(log, "w", encoding="utf-8") as f:
         r = subprocess.run([py, "-m", "losslesssync", "sync", "--ref", os.path.join(d, "ref.mka"),
@@ -44,7 +53,7 @@ def main():
     ap.add_argument("--cases", default=",".join(CASES))
     a = ap.parse_args()
     cases = [c for c in a.cases.split(",") if c]
-    bad = [c for c in cases if c.removeprefix("drop_") not in ("pal", "tempo", "none")]
+    bad = [c for c in cases if c not in CASES]
     if bad:
         ap.error(f"unknown case(s): {', '.join(bad)}")
     results = [run_case(a.out_root, c) for c in cases]

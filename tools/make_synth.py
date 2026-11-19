@@ -1,9 +1,14 @@
 """Generate a synthetic Blu-ray reference + TV dub pair with known ground truth.
 
 usage: python tools/make_synth.py OUT_DIR [--variant pal|tempo|none] [--seed N] [--dropouts]
+                                  [--ad] [--recap] [--intro] [--channels 1|2|6]
 
 --dropouts adds TV signal failures: lost audio (time skips) and muted stretches, several
 in a row, on top of the usual edits.
+--ad inserts a 30 s ad break into the TV at ref 100 s (the ref runs on across it).
+--recap starts the TV with a 20 s recap made of later programme (repeated content).
+--intro replaces the first 20 s of the programme with a different 25 s TV intro.
+--channels sets the TV layout: mono, stereo (default) or 5.1 (AC-3 instead of MP2).
 """
 from __future__ import annotations
 
@@ -110,6 +115,10 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--dur", type=float, default=420.0)
     ap.add_argument("--dropouts", action="store_true")
+    ap.add_argument("--ad", action="store_true")
+    ap.add_argument("--recap", action="store_true")
+    ap.add_argument("--intro", action="store_true")
+    ap.add_argument("--channels", type=int, default=2, choices=[1, 2, 6])
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     rng = np.random.default_rng(a.seed)
@@ -160,6 +169,13 @@ def main():
 
     # ideal result = programme with removed parts silenced
     edits = [(0, 150), (150, 250), (254, 400)]
+    lead = {0: 8.0, 150: 75.0, 254: 0.0}
+    if a.ad:
+        edits[0:1] = [(0, 100), (100, 150)]
+        lead[100] = 30.0
+    if a.intro:
+        edits[0] = (20, edits[0][1])
+        lead[20] = 25.0
     ideal = np.zeros_like(prog)
     for s, e in edits:
         ideal[int(s * SR):int(e * SR)] = prog[int(s * SR):int(e * SR)]
@@ -169,8 +185,11 @@ def main():
 
     r2 = np.random.default_rng(a.seed + 300)
     junk = lambda d: np.stack([note_track(r2, d, 2) + effects_track(r2, d, 2)] * 2, 1) * 0.8
-    lead = {0: 8.0, 150: 75.0, 254: 0.0}
     parts, segments, pos = [], [], 0.0
+    if a.recap:
+        for s, e in ((300.0, 310.0), (210.0, 220.0)):
+            parts.append(prog_tv[int(s * SR):int(e * SR)])
+            pos += e - s
     for s, e in edits:
         if lead[s]:
             parts.append(junk(lead[s]))
@@ -185,8 +204,14 @@ def main():
             cur = t + d
     parts.append(junk(5))
     tv = np.concatenate(parts)
-    truth = {"segments": segments, "gaps": [[250, 254], [400, D]], "variant": a.variant,
+    truth = {"segments": segments, "variant": a.variant,
              "dropouts": [{"ref_start": t, "ref_end": t + d, "kind": k} for t, d, k in drops]}
+    if a.channels == 1:
+        tv = tv.mean(1)
+    elif a.channels == 6:
+        # 5.1 (FL FR FC LFE BL BR): the programme in front, a little of it in the surrounds
+        L, R = tv[:, 0], tv[:, 1]
+        tv = np.stack([L, R, 0.5 * (L + R), np.zeros_like(L), 0.3 * L, 0.3 * R], 1) * 0.7
     tv_wav = os.path.join(a.out, "tv_pre.wav")
     if a.variant == "pal":
         tv = signal.resample_poly(tv, 960, 1001, axis=0).astype(np.float32)
@@ -203,7 +228,8 @@ def main():
     else:
         truth["speed"] = 1.0
         write_wav(tv_wav, tv)
-    ff("-i", tv_wav, "-c:a", "mp2", "-b:a", "256k", "-metadata:s:a:0", "language=por",
+    codec = ["ac3", "-b:a", "448k"] if a.channels == 6 else ["mp2", "-b:a", "256k"]
+    ff("-i", tv_wav, "-c:a", *codec, "-metadata:s:a:0", "language=por",
        "-f", "mpegts", os.path.join(a.out, "tv.ts"))
     os.remove(tv_wav)
     with open(os.path.join(a.out, "truth.json"), "w") as f:
