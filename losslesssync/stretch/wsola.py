@@ -38,7 +38,7 @@ def stretch(in_wav: str, out_wav: str, k: float, tol_ms: float = 5.0,
     n_out = int(round(n_in * k))
     w = (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(N) / N)).astype(np.float32)  # sums to 1 at hop N/2
     wout = WavWriter(out_wav, n_out, ch, sr, info.mask)
-    if native.dsp():          # same algorithm in Rust (rust/src/main.rs), ~15x faster
+    if native.dsp():          # same algorithm in Rust (dsp/src/main.rs), ~15x faster
         wout.f.close()        # header only: the kernel appends the samples
         med, mx, wide = native.run("wsola", in_wav, info.offset, n_in, ch, out_wav, n_out,
                                    repr(k), N, D0, D, repr(margin), int(stereo)).split()

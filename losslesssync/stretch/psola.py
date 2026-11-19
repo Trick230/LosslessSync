@@ -1,4 +1,4 @@
-"""Pitch-synchronous time stretch for the vocals stem (TD-PSOLA, rust/src/psola.rs).
+"""Pitch-synchronous time stretch for the vocals stem (TD-PSOLA, dsp/src/psola.rs).
 
 Whole pitch periods are repeated (or dropped) where a period matches its neighbour best, and
 the input is copied exactly in between, so a voice keeps its waveform: no phasiness and none

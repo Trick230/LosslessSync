@@ -41,8 +41,8 @@ pieces touch get a 4 ms splice guard.
 - `numpy` and `scipy`
 - `ffmpeg` and `ffprobe` on `PATH` (with `librubberband` for the time-stretch mode)
 - Tkinter, for the GUI (included with the standard Python installers)
-- Optional, for speed: Rust, to build the native kernels (`cd rust && cargo build --release`).
-  `losslesssync` finds `rust/target/release/lls-dsp` by itself (or `$LOSSLESSSYNC_DSP`;
+- Optional, for speed: Rust, to build the native kernels (`cd dsp && cargo build --release`).
+  `losslesssync` finds `dsp/target/release/lls-dsp` by itself (or `$LOSSLESSSYNC_DSP`;
   `LOSSLESSSYNC_DSP=off` forces the Python code). The WSOLA stretch is bit-identical and
   about 6x faster (T05E01 `--pitch keep`: 80 s -> 59 s end to end).
 - Optional, for `--keep-engine stems`: a second Python (3.11 works) with
@@ -76,7 +76,7 @@ pieces touch get a 4 ms splice guard.
   ```
   set PATH=C:\path\to\mingw64\bin;%PATH%
   set LIBCLANG_PATH=C:\path\to\mingw64\bin
-  cd rust && cargo build --release --features signalsmith
+  cd dsp && cargo build --release --features signalsmith
   ```
 
 ## Installation
@@ -202,7 +202,7 @@ Or `python -m losslesssync gui`.
 | `losslesssync/sync/` | `pipeline` (the steps above), `features`, `speed` (speed, anchors, pitch mode), `segments` (fine offsets, drift), `gaps` (dropouts, muted spans), `cuts` (cut points) |
 | `losslesssync/audio/` | ffmpeg decoding and encoding, WAV I/O, rendering |
 | `losslesssync/stretch/` | Pitch-keeping stretchers: WSOLA, PSOLA, separated stems and their helper (`ext`), the native kernels (`native`) |
-| `rust/` | `lls-dsp`, the native WSOLA/PSOLA/HPSS/Signalsmith kernels |
+| `dsp/` | `lls-dsp`, the native WSOLA/PSOLA/HPSS/Signalsmith kernels |
 | `tools/` | Synthetic test material, checks and stretch-quality scoring |
 
 ## Output and report

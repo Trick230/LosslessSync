@@ -94,7 +94,7 @@ def start_split(src_path, src_st, tmp, opt, log) -> tuple[Helper, str, str, str]
     return job, raw, voc, rest_k
 
 
-# the attacks' WSOLA in lls-dsp stretch --perc (rust/src/main.rs), for the report
+# the attacks' WSOLA in lls-dsp stretch --perc (dsp/src/main.rs), for the report
 PERC_FRAME_MS, PERC_TOL_MS, PERC_MAX_MS = 12.0, 3.0, 5.0
 
 

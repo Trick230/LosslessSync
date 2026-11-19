@@ -1,6 +1,6 @@
-"""Locates the optional native kernels (rust/, binary lls-dsp).
+"""Locates the optional native kernels (dsp/, written in Rust, binary lls-dsp).
 
-Looked up in $LOSSLESSSYNC_DSP, then rust/target/release next to the package, then PATH.
+Looked up in $LOSSLESSSYNC_DSP, then dsp/target/release next to the package, then PATH.
 Set LOSSLESSSYNC_DSP=off to force the pure-Python code.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ def dsp() -> str | None:
     if env.lower() in ("off", "0", "no"):
         return None
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    for cand in (env, os.path.join(root, "rust", "target", "release", _EXE), shutil.which(_EXE)):
+    for cand in (env, os.path.join(root, "dsp", "target", "release", _EXE), shutil.which(_EXE)):
         if cand and os.path.isfile(cand):
             return cand
     return None
