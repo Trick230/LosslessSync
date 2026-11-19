@@ -80,28 +80,52 @@ class Log:
         self.fn(f"[{time.time() - self.t0:6.1f}s] {msg}")
 
 
+def verify_window(ref16: np.ndarray, out16: np.ndarray, t: float, win: float = 6.0,
+                  sub: float = 3.0) -> float | None:
+    """Timing error (s) of out16 against ref16 over [t, t + win], or None. One correlation
+    can lock onto a wrong peak (periodic music, the other language's dialogue: up to ~100 ms
+    on a perfectly placed track), so the whole window and three overlapping halves are
+    measured and only an error that at least three of them agree on is kept."""
+    rs = [align.fine_measure(ref16, out16, t, 0.0, win, max_lag=0.1)]
+    rs += [align.fine_measure(ref16, out16, u, 0.0, sub, max_lag=0.1)
+           for u in np.linspace(t, t + win - sub, 3)]
+    v = [r[0] for r in rs if r is not None]
+    best = []
+    for c in v:
+        g = [x for x in v if abs(x - c) <= max(0.001, 0.1 * abs(c))]
+        if len(g) > len(best):
+            best = g
+    return float(np.median(best)) if len(best) >= 3 else None
+
+
 def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float = 6.0,
-           step: float = 10.0) -> dict:
-    errs, methods, points = [], [], []
-    total = 0
-    for p in pieces:
-        t = p["start"] + 1.0
-        while t + win <= p["end"] - 1.0:
-            total += 1
-            r = align.fine_measure(ref16, out16, t, 0.0, win, max_lag=0.1)
-            if r is not None:
-                errs.append(r[0])
-                methods.append(r[2])
-            # window centre and signed error (ms), None where nothing could be measured
-            points.append([round(t + win / 2, 3), None if r is None else round(r[0] * 1000, 4)])
-            t += step
+           step: float = 5.0) -> dict:
+    ts = [t for p in pieces for t in np.arange(p["start"] + 1.0, p["end"] - 1.0 - win + 1e-9, step)]
+    res = align.pmap(lambda t: verify_window(ref16, out16, t, win), ts)
+    # window centre and signed error (ms), None where nothing could be measured
+    points = [[round(float(t) + win / 2, 3), None if r is None else round(r * 1000, 4)]
+              for t, r in zip(ts, res)]
+    errs = [r for r in res if r is not None]
     if not errs:
-        return {"windows": total, "measured": 0, "points": points}
+        return {"windows": len(ts), "measured": 0, "points": points}
     e = np.abs(np.array(errs)) * 1000
-    return {"windows": total, "measured": len(errs), "points": points,
-            "phat": sum(m == "phat" for m in methods),
+    return {"windows": len(ts), "measured": len(errs), "points": points,
             "median_abs_ms": float(np.median(e)), "p95_abs_ms": float(np.percentile(e, 95)),
             "max_abs_ms": float(e.max()), "within_1ms_pct": float((e <= 1.0).mean() * 100)}
+
+
+def unmeasured_spans(points: list, win: float = 6.0) -> list[tuple[float, float]]:
+    """Runs of verify windows that could not be measured, as (start, end) in seconds."""
+    spans = []
+    for c, e in points:
+        if e is not None:
+            continue
+        a, b = c - win / 2, c + win / 2
+        if spans and a <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], b)
+        else:
+            spans.append((a, b))
+    return spans
 
 
 def uses_stems(out_path, opt: Options) -> bool:
@@ -323,6 +347,10 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
             log(f"  {v['measured']}/{v['windows']} windows measured: median {v['median_abs_ms']:.3f} ms, "
                 f"p95 {v['p95_abs_ms']:.3f} ms, max {v['max_abs_ms']:.3f} ms, "
                 f"{v['within_1ms_pct']:.1f}% within 1 ms")
+        um = unmeasured_spans(v["points"])
+        if um:
+            log(f"  not measurable (too little shared sound): {len(um)} stretch(es), "
+                f"{sum(b - a for a, b in um):.0f} s in all")
         log(f"encoding {codec} -> {out_path}")
         prog("encode", 0.0)
         media.encode(out_wav, out_path, codec, opt.bitrate, opt.language)

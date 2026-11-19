@@ -147,6 +147,12 @@ def review_items(r: dict, p95_ms: float = 1.0) -> list[str]:
         out.append(f"... and {len(bad) - 15} more window(s) above 1 ms")
     if "verify" in r and not v.get("measured"):
         out.append("<b class=warn>not verified</b>: no window could be measured")
+    else:
+        from .pipeline import unmeasured_spans
+        for a, b in unmeasured_spans(v.get("points") or []):
+            if b - a >= 15:
+                out.append(f"<b class=warn>not measured</b> {_t(a)} - {_t(b)}: too little "
+                           f"sound shared with the reference to check the timing; listen")
     cov = r.get("coverage_pct")
     if cov is not None and cov < 95:
         out.append(f"<b class=warn>coverage</b> only {cov:.1f}% of the reference has source audio")
