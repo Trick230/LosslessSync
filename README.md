@@ -53,13 +53,19 @@ pieces touch get a 4 ms splice guard.
   py -3.11 -m venv .venv-sep
   .venv-sep\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu126
   .venv-sep\Scripts\pip install "audio-separator[gpu]" python-stretch soundfile
+  .venv-sep\Scripts\pip install "triton-windows<3.10"
   ```
 
   Then pass `--ext-python .venv-sep\Scripts\python.exe` (or set `LOSSLESSSYNC_EXT_PYTHON`).
 
+  With Triton installed the model's repeated blocks are compiled (`torch.compile`):
+  separation chunks run 2.15x faster on an RTX 4060 (2-episode batch 200 s -> 168-186 s),
+  for ~15 s of compiling the first time and ~5 s after that (cached next to the models).
+
   The separation runs on CUDA (NVIDIA, or AMD with a ROCm torch build), else on an Intel
-  GPU with a torch XPU build, else through DirectML (any DX12 GPU) when `torch-directml`
-  is installed in that Python, else on the CPU (much slower).
+  GPU with a torch XPU build, else on the CPU (much slower). With `torch-directml`
+  installed it would use DirectML, but audio-separator runs the RoFormer model on the CPU
+  there (DirectML runs out of memory on it), so DirectML gives no speed-up.
 
   With `lls-dsp` built with `--features signalsmith`, the helper stretches the rest while
   the GPU is still separating the vocals, instead of afterwards (T05E01: 151 s -> 115-139 s;

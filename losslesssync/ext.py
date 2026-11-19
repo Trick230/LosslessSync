@@ -115,7 +115,12 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
     import shutil
     import tempfile
     import threading
+    from importlib.util import find_spec
 
+    # torch.compile's kernels, kept with the models instead of the system temp folder:
+    # a cold compile takes ~15 s, a cached one ~5 s
+    os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR",
+                          os.path.join(os.path.dirname(os.path.abspath(model_dir)), "inductor"))
     import numpy as np
     import soundfile as sf
     import soxr
@@ -185,6 +190,9 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
     sep = Separator(output_dir=tmp, output_format="WAV",
                     model_file_dir=model_dir, log_level=logging.WARNING,
                     output_single_stem="Vocals", use_autocast=True,
+                    # regional torch.compile of the repeated RoFormer blocks: 2.15x faster
+                    # chunks on an RTX 4060, 76 dB from eager; needs Triton (triton-windows)
+                    use_torch_compile=find_spec("triton") is not None,
                     mdxc_params={"segment_size": 256, "override_model_segment_size": False,
                                  "batch_size": 4, "overlap": None, "pitch_shift": 0},
                     # the device: CUDA (NVIDIA, and AMD with a ROCm torch build), else
