@@ -148,6 +148,13 @@ def unmeasured_spans(points: list, win: float = 6.0) -> list[tuple[float, float]
     return spans
 
 
+NO_MATCH = ("the source shares no audio with the reference: wrong file, episode or audio "
+            "track (see --src-track)?")
+# below this much of the reference covered AND of the source used, the pair is refused (a
+# truncated recording uses most of its source; another episode shares only its titles)
+LOW_MATCH_PCT = 40.0
+
+
 def uses_stems(out_path, opt: Options) -> bool:
     """Whether a sync separates the source (so the separation can start right away)."""
     return bool(out_path and not opt.analyze_only and opt.pitch == "keep"
@@ -212,7 +219,7 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     n_conf = sum(speed.is_confident(a) for a in anchors)
     log(f"  {len(anchors)} anchors, {n_conf} confident")
     if n_conf < 2:
-        raise media.MediaError("could not find matching content between the two tracks")
+        raise media.MediaError(NO_MATCH)
     del S
 
     if forced is None:
@@ -271,7 +278,7 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     if dropped:
         log(f"  dropped {len(dropped)} unconfirmed segment(s)")
     if not segs:
-        raise media.MediaError("no segment could be confirmed by fine alignment")
+        raise media.MediaError(NO_MATCH)
     segs = segments.merge_equal(segs, k, opt.chunk_s)
 
     log("placing cut points...")
@@ -326,8 +333,15 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     if ref_dur - prev > 0.01:
         report["gaps"].append({"start": prev, "end": ref_dur})
     report["coverage_pct"] = covered / ref_dur * 100
+    src_dur = len(src16) / ANA_SR
+    report["source_used_pct"] = covered / k / src_dur * 100
 
     log_segments(log, report)
+    if report["coverage_pct"] < LOW_MATCH_PCT and report["source_used_pct"] < LOW_MATCH_PCT:
+        raise media.MediaError(
+            f"the source matches only {report['coverage_pct']:.0f}% of the reference and only "
+            f"{report['source_used_pct']:.0f}% of the source is used: probably another episode "
+            f"(shared titles or credits) or the wrong file")
 
     if not opt.analyze_only and out_path:
         pool = ThreadPoolExecutor(1)

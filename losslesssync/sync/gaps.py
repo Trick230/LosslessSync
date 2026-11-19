@@ -6,7 +6,7 @@ from scipy.signal import fftconvolve
 
 from .features import ANA_SR, pmap
 from .speed import Anchor, DROPOUT_MAX_JUMP, HOP, NCC_REG, parabolic
-from .segments import Segment, fine_measure, summarize_fine
+from .segments import Segment, fine_measure, phase_coherent, summarize_fine
 
 # ---------------------------------------------------------------- signal dropouts
 
@@ -163,7 +163,13 @@ def split_on_dropouts(segs: list[Segment], ref16, src16, Rb, Sb, k: float, chunk
         lo = segs[i - 1].core(k, chunk_s)[1] if i > 0 else 0.0
         hi = segs[i + 1].core(k, chunk_s)[0] if i + 1 < len(segs) else ref_dur
         obs = track_offsets(ref16, src16, Rb, Sb, s.offset, lo, hi, max_jump=max_jump)
-        runs = _monotonic_runs(offset_runs(obs), max_jump)
+        runs = offset_runs(obs)
+        if phase_coherent(s):
+            # lost audio does not change what the source is: in a phase-coherent recording
+            # a run matched only by levels is unrelated audio (another programme after
+            # the episode), not the episode after a dropout
+            runs = [r for r in runs if sum(o[3] == "phat" for o in r) >= max(2, 0.5 * len(r))]
+        runs = _monotonic_runs(runs, max_jump)
         if not runs:
             found.append(s)
             continue
