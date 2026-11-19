@@ -275,6 +275,7 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         if any(abs(s.offset - x.offset) < 0.5 for x in near):
             dropped.append(s)
     segs = [s for s in segs if s not in dropped]
+    segs = segments.drop_ref_nested(segs, k, opt.chunk_s)
     if dropped:
         log(f"  dropped {len(dropped)} unconfirmed segment(s)")
     if not segs:

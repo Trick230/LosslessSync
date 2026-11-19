@@ -7,7 +7,7 @@ from scipy.ndimage import binary_dilation, uniform_filter1d
 
 from .features import ANA_SR, _nw
 from .speed import DROPOUT_MAX_JUMP, HOP, NCC_REG
-from .segments import FLUX_HOP, Segment, _flux_bands
+from .segments import FLUX_HOP, Segment, _flux_bands, phase_coherent
 from .gaps import _energy_db, dropout_gaps
 
 # ---------------------------------------------------------------- cut points
@@ -33,8 +33,9 @@ def local_sim(R: np.ndarray, S: np.ndarray, off_frames: int, f0: int, f1: int,
 
 def coherence_sim(ref16: np.ndarray, src16: np.ndarray, offset: float, f0: int, f1: int,
                   n_fft: int = 1024, fmin: float = 150.0, fmax: float = 6000.0,
-                  smooth: int = 5, beta: float = 0.25, block: int = 2048) -> np.ndarray:
-    """Per-frame (HOP) phase coherence between ref and source at the exact offset.
+                  smooth: int = 5, beta: float = 0.25, block: int = 2048,
+                  hop: float = HOP) -> np.ndarray:
+    """Per-frame (hop, window centred on the frame) phase coherence between ref and source at the exact offset.
 
     The shared M&E is sample-coherent, so at the right lag coherence is high; unrelated
     audio gives ~0. Bins are weighted by |cross-spectrum|^beta (partial PHAT) so that a
@@ -43,7 +44,7 @@ def coherence_sim(ref16: np.ndarray, src16: np.ndarray, offset: float, f0: int, 
     """
     sr = ANA_SR
     f = np.arange(f0, f1)
-    p = np.round(f * HOP * sr).astype(np.int64)
+    p = np.round(f * hop * sr).astype(np.int64)
     q_exact = p - offset * sr
     qi = np.floor(q_exact).astype(np.int64)
     frac = float(q_exact[0] - qi[0]) if len(f) else 0.0
@@ -173,10 +174,12 @@ def place_segments(segs: list[Segment], R: np.ndarray, S: np.ndarray, ref_dur: f
             Bs = segs[i] if i < len(segs) else None
             if A is None and Bs is None:
                 break
+            # the first/last anchor centre can sit just outside the programme (its
+            # window only partly matched): search a margin into the segment too
             if A is None:
-                f0, f1 = 0, int(Bs.core(k, chunk_s)[0] * fps)
+                f0, f1 = 0, int((Bs.core(k, chunk_s)[0] + margin) * fps)
             elif Bs is None:
-                f0, f1 = int(A.core(k, chunk_s)[1] * fps), n_ref
+                f0, f1 = int(max(0.0, A.core(k, chunk_s)[1] - margin) * fps), n_ref
             else:
                 ea, sb = A.core(k, chunk_s)[1], Bs.core(k, chunk_s)[0]
                 f0 = int(max(0.0, min(ea, sb) - margin) * fps)
@@ -389,11 +392,126 @@ def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float,
             t = _snap(src16, s.ref_start - s.offset, "start")
             if t is not None:
                 s.ref_start = max(0.0, t + s.offset)
+    if ref16 is not None:
+        _refine_coherent(segs, ref16, src16, ref_dur)
     for a, b in zip(segs, segs[1:]):
         b.ref_start = max(b.ref_start, a.ref_end)                    # no overlap on the ref
         if b.offset > a.offset:                                      # no source reuse
             b.ref_start = max(b.ref_start, a.ref_end - a.offset + b.offset)
     return [s for s in segs if s.ref_end - s.ref_start > 0.1]
+
+
+# 1 ms phase coherence over 16 ms windows: fine enough to pin a cut to the millisecond,
+# long enough to tell matched from unmatched audio
+_FINE_HOP = FLUX_HOP / ANA_SR
+_FINE_NFFT = 256
+
+
+def _fine_coh(ref16, src16, offset: float, t0: float, t1: float):
+    f0, f1 = int(np.floor(t0 / _FINE_HOP)), int(np.ceil(t1 / _FINE_HOP))
+    c = coherence_sim(ref16, src16, offset, f0, f1, n_fft=_FINE_NFFT, smooth=1, hop=_FINE_HOP)
+    return f0, np.where(c > -1e2, c, 0.0)
+
+
+def _clear_edge(c_in: np.ndarray, c_out: np.ndarray, lv: float) -> bool:
+    """A cut the coherence can see: matched just inside, clearly less just outside (a fade
+    or a quiet passage has no visible edge; the level-based cut stays then)."""
+    if len(c_in) < 3 or len(c_out) < 3:
+        return False
+    a, b = float(np.mean(c_in)), float(np.mean(c_out))
+    # chance coherence of 15 overlapping 16 ms frames has a std of ~0.07: the floor
+    # keeps a weak segment from moving on noise
+    return a >= 0.5 * lv and a - b >= max(0.4 * lv, 0.2)
+
+
+def _refine_coherent(segs: list[Segment], ref16, src16, ref_dur: float,
+                     search: float = 0.04, ctx: float = 0.3, min_coh: float = 0.25,
+                     side: int = 15):
+    """Pin the cuts of phase-coherent segments to 1 ms. place_segments and the splice
+    search work on 10 ms frames (or a level dip), which leaves up to a frame of the wrong
+    audio at each cut. Each cut moves by at most search: two neighbours that the source
+    or the ref runs on across switch where A's coherence hands over to B's; any other
+    edge ends (starts) where its own coherence drops below half its level inside. A level
+    step across the cut biases that by up to ~5 ms (+-20 dB)."""
+    sr_end = len(ref16) / ANA_SR
+
+    def level(s, t0, t1):
+        _, c = _fine_coh(ref16, src16, s.offset, max(t0, s.ref_start), min(t1, s.ref_end))
+        return float(np.median(c)) if len(c) else 0.0
+
+    def one_sided(s, kind):
+        t = s.ref_end if kind == "end" else s.ref_start
+        lo, hi = max(0.0, t - search), min(sr_end, t + search)
+        lv = level(s, t - ctx - search, t - search) if kind == "end" else \
+            level(s, t + search, t + search + ctx)
+        if lv < min_coh or hi - lo < 4 * _FINE_HOP:
+            return
+        f0, c = _fine_coh(ref16, src16, s.offset, lo, hi)
+        d = c - 0.5 * lv
+        cs = np.concatenate([[0.0], np.cumsum(d)])
+        # boundary j: frames < j are in the segment (end) or out of it (start)
+        sc = cs if kind == "end" else cs[-1] - cs
+        tb = (f0 + np.arange(len(cs)) - 0.5) * _FINE_HOP
+        j = int(np.argmax(sc - 1e-6 * np.abs(tb - t)))
+        pre, post = c[max(0, j - side):j], c[j:j + side]
+        if not _clear_edge(pre if kind == "end" else post, post if kind == "end" else pre, lv):
+            return
+        if kind == "end":
+            s.ref_end = float(np.clip(tb[j], s.ref_start, ref_dur))
+        else:
+            s.ref_start = float(np.clip(tb[j], 0.0, s.ref_end))
+
+    def two_sided(a, b, g):
+        """A ends at c, B starts at c + g (g: the source runs on, 0: the ref runs on)."""
+        t = a.ref_end
+        lo, hi = t - search, t + search
+        if lo - ctx < a.ref_start or hi + g + ctx > b.ref_end:
+            return False
+        lv = min(level(a, lo - ctx, lo), level(b, hi + g, hi + g + ctx))
+        if lv < min_coh:
+            return False
+        f0, ca = _fine_coh(ref16, src16, a.offset, lo, hi)
+        _, cb = _fine_coh(ref16, src16, b.offset, lo + g, hi + g)
+        n = min(len(ca), len(cb))
+        if n < 4:
+            return False
+        ca, cb = ca[:n], cb[:n]
+        PA = np.concatenate([[0.0], np.cumsum(ca)])
+        PB = np.concatenate([[0.0], np.cumsum(cb)])
+        tb = (f0 + np.arange(n + 1) - 0.5) * _FINE_HOP
+        m = int(np.argmax(PA + PB[n] - PB - 1e-6 * np.abs(tb - t)))
+        # A hands over to B: A matched before the cut and not after, B the other way round
+        if not (_clear_edge(ca[max(0, m - side):m], ca[m:m + side], lv) and
+                _clear_edge(cb[m:m + side], cb[max(0, m - side):m], lv)):
+            return False
+        a.ref_end, b.ref_start = float(tb[m]), float(tb[m]) + g
+        return True
+
+    done = set()
+    for i, (a, b) in enumerate(zip(segs, segs[1:])):
+        if not (phase_coherent(a) and phase_coherent(b)):
+            continue
+        s_a, s_b = a.ref_end - a.offset, b.ref_start - b.offset
+        if abs(s_b - s_a) < 0.05 and b.offset > a.offset:      # source runs on (splice, lost audio)
+            two_sided(a, b, b.offset - a.offset)
+        elif abs(b.ref_start - a.ref_end) < 0.05:              # ref runs on (inserted material)
+            two_sided(a, b, 0.0)
+        else:
+            continue
+        # both edges move together or not at all: one-sided moves would tear a splice open
+        done.update((("end", i), ("start", i + 1)))
+    for i, (a, b) in enumerate(zip(segs, segs[1:])):
+        # an edge that butts against (or whose source runs on into) its neighbour moves
+        # only with it: alone it would open a hole, and holes are faded on both sides
+        if b.ref_start - a.ref_end < 0.01 or abs((b.ref_start - b.offset) - (a.ref_end - a.offset)) < 0.05:
+            done.update((("end", i), ("start", i + 1)))
+    for i, s in enumerate(segs):
+        if not phase_coherent(s):
+            continue
+        if ("start", i) not in done and s.ref_start > 0.01:
+            one_sided(s, "start")
+        if ("end", i) not in done and s.ref_end < ref_dur - 0.01:
+            one_sided(s, "end")
 
 
 def _spec_similarity(ref16, src16, a: float, b: float, offset: float, win: float = 2.0):

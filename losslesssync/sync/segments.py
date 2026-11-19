@@ -216,6 +216,16 @@ def split_on_jumps(segs: list[Segment], k: float, chunk_s: float,
     return out
 
 
+def drop_ref_nested(segs: list[Segment], k: float, chunk_s: float) -> list[Segment]:
+    """Drop segments lying inside a larger segment on the ref timeline: the ref is filled
+    once, so a second match there is repeated content in the source (a recap, a preview)."""
+    def core(s):
+        return s.core(k, chunk_s)
+    return [s for s in segs
+            if not any(o is not s and len(o.anchors) > len(s.anchors) and o.method != "coarse"
+                       and core(o)[0] <= core(s)[0] and core(s)[1] <= core(o)[1] for o in segs)]
+
+
 def merge_equal(segs: list[Segment], k: float, chunk_s: float,
                 tol: float = 0.002) -> list[Segment]:
     """Join segments that are neighbours on the ref timeline and share the same offset
