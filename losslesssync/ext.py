@@ -1,12 +1,13 @@
 """Helpers that run in a separate Python with the heavy optional packages.
 
     python -m losslesssync.ext stretch IN OUT K     Signalsmith Stretch (python-stretch)
-    python -m losslesssync.ext separate IN VOCALS REST_K MODEL MODEL_DIR
+    python -m losslesssync.ext separate IN VOCALS REST_K MODEL MODEL_DIR [STRETCH_OPTS...]
                                                     vocals stem (audio-separator's RoFormer,
                                                     GPU); reads K from stdin and stretches
                                                     the residual IN - VOCALS with
                                                     Signalsmith into REST_K, streamed
-                                                    through lls-dsp when it is built
+                                                    through lls-dsp when it is built (with
+                                                    its stretch options, e.g. --perc)
 
 Only numpy and soundfile from the main package's dependencies are needed here, so the
 helper Python can be a venv with torch (see README). Outputs are float WAV.
@@ -36,8 +37,11 @@ def stretch(src: str, dst: str, k: float):
 
 
 def _stretcher(dst: str, channels: int, sr: int):
-    """Returns start(k) -> (feed(block), close(), abort()) for the residual's Signalsmith stretch:
-    streamed through lls-dsp when it has the subcommand, else python-stretch at the end."""
+    """Returns (start, framed) for the residual's Signalsmith stretch, streamed through lls-dsp
+    when it has the subcommand, else python-stretch at the end. start(k, opts) -> (feed(block),
+    set_k(k), close(), abort()); when framed, k may be None and given later with set_k, so the
+    input flows (and lls-dsp splits it) before the ratio is known."""
+    import struct
     import subprocess
 
     import numpy as np
@@ -50,13 +54,29 @@ def _stretcher(dst: str, channels: int, sr: int):
         r = subprocess.run([exe, "stretch"], stdin=subprocess.DEVNULL, capture_output=True)
         if b"usage: lls-dsp stretch" not in r.stderr:
             exe = None                   # an older build, WSOLA only
+    # a build that takes K on stdin, and the options
+    framed = bool(exe) and b"K|-" in r.stderr
 
-    def start(k: float):
+    def start(k: float | None, opts=()):
+        """opts: lls-dsp stretch options (block, interval, --perc); dropped when the build
+        or the fallback cannot take them (the caller sees no attacks file then)."""
         if exe:
-            p = subprocess.Popen([exe, "stretch", dst, str(channels), str(sr), repr(k)],
+            p = subprocess.Popen([exe, "stretch", dst, str(channels), str(sr),
+                                  "-" if framed else repr(k), *(opts if framed else ())],
                                  stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
 
+            def feed(b):
+                b = np.ascontiguousarray(b, np.float32)
+                if framed:
+                    p.stdin.write(struct.pack("<I", len(b)))
+                p.stdin.write(b.tobytes())
+
+            def set_k(kk: float):
+                p.stdin.write(struct.pack("<Id", 0xFFFFFFFF, kk))
+
             def close():
+                if framed:                   # end of input (a bare EOF is an error)
+                    p.stdin.write(struct.pack("<I", 0xFFFFFFFE))
                 p.stdin.close()
                 if p.wait():
                     raise RuntimeError(f"lls-dsp stretch failed ({p.returncode})")
@@ -65,8 +85,9 @@ def _stretcher(dst: str, channels: int, sr: int):
                 if p.poll() is None:
                     p.kill()
                 p.wait()
-            return (lambda b: p.stdin.write(np.ascontiguousarray(b, np.float32).tobytes()),
-                    close, abort)
+            if framed and k is not None:
+                set_k(k)
+            return feed, set_k, close, abort
         blocks = []
 
         def close_ps():
@@ -76,15 +97,17 @@ def _stretcher(dst: str, channels: int, sr: int):
             y = _signalsmith(x, sr, k)
             del x
             sf.write(dst, y.T, sr, subtype="FLOAT", format="RF64")
-        return blocks.append, close_ps, blocks.clear
-    return start
+        return blocks.append, None, close_ps, blocks.clear
+    return start, framed
 
 
-def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str):
+def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str, *opts):
     """Vocals stem at the source rate and channel count; prints "vocals" on stdout once it is
     written. K comes on stdin, sent once the sync knows it, usually during the separation:
     the residual src - vocals is then stretched by K into REST_K as the stem comes out of
-    the GPU, so little of the stretch is left when the vocals are done."""
+    the GPU, so little of the stretch is left when the vocals are done. lls-dsp gets the
+    residual as it comes even before K (it splits off the attacks meanwhile); opts are its
+    stretch options."""
     import contextlib
     import gc
     import logging
@@ -106,29 +129,44 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
     x, sr = sf.read(src, dtype="float32", always_2d=True)
     n, ch = x.shape
 
-    ks: queue.Queue = queue.Queue()
-    threading.Thread(target=lambda: ks.put(sys.stdin.readline().strip() or None),
-                     daemon=True).start()
+    # the residual's blocks, then None (or abort_mark); the ratio line comes in among them
     rest: queue.Queue = queue.Queue()
+    threading.Thread(target=lambda: rest.put(sys.stdin.readline().strip()),
+                     daemon=True).start()
     err = []
-    start = _stretcher(rest_k_out, ch, sr)
+    start, framed = _stretcher(rest_k_out, ch, sr)
 
     def rest_writer():
         ended = False
         abort = None
         try:
-            k = ks.get()
-            if k is None:
-                return                   # the caller went away
-            feed, close, abort = start(float(k))
-            while True:
+            feed = set_k = None
+            if framed:
+                feed, set_k, close, abort = start(None, opts)
+            backlog = []
+            k = None
+            while not (ended and k is not None):
                 blk = rest.get()
-                if blk is None or blk is abort_mark:
+                if blk is abort_mark:
                     ended = True
-                    if blk is abort_mark:
-                        raise RuntimeError("separation failed")
-                    break
-                feed(blk)
+                    raise RuntimeError("separation failed")
+                if blk is None:
+                    ended = True
+                elif isinstance(blk, str):
+                    if not blk:
+                        raise RuntimeError("no ratio: the caller went away")
+                    k = float(blk)
+                    if feed is None:
+                        feed, set_k, close, abort = start(k, opts)
+                        for b in backlog:
+                            feed(b)
+                        backlog.clear()
+                    else:
+                        set_k(k)
+                elif feed is None:
+                    backlog.append(blk)
+                else:
+                    feed(blk)
             close()
         except BaseException as e:       # reported by the main thread
             err.append(e)
@@ -148,7 +186,16 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
                     model_file_dir=model_dir, log_level=logging.WARNING,
                     output_single_stem="Vocals", use_autocast=True,
                     mdxc_params={"segment_size": 256, "override_model_segment_size": False,
-                                 "batch_size": 4, "overlap": None, "pitch_shift": 0})
+                                 "batch_size": 4, "overlap": None, "pitch_shift": 0},
+                    # the device: CUDA (NVIDIA, and AMD with a ROCm torch build), else
+                    # DirectML (any DX12 GPU) when torch-directml is installed, else CPU
+                    use_directml=True)
+    # Intel GPUs with a torch XPU build: native, faster than DirectML; audio-separator
+    # does not look for them
+    if (sep.torch_device.type in ("cpu", "privateuseone") and hasattr(torch, "xpu")
+            and torch.xpu.is_available()):
+        sep.torch_device = torch.device("xpu")
+    print(f"separation device: {sep.torch_device}", file=sys.stderr, flush=True)
     sep.load_model(model_filename=model)
     inst = sep.model_instance
     cfg = inst.model_data_cfgdict
@@ -230,7 +277,6 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
         voc.close()
     except BaseException:
         voc.close()
-        ks.put(None)                     # the writer may still be waiting for K
         rest.put(abort_mark)             # stops lls-dsp instead of letting it finish
         writer.join()
         raise

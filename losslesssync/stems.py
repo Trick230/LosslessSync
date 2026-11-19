@@ -1,20 +1,23 @@
-"""Pitch-keeping stretch on separated stems: the voice with WSOLA, the rest with a phase vocoder.
+"""Pitch-keeping stretch on separated stems, each with the stretcher that suits it.
 
-A single WSOLA splice cannot fit voice and music at once (their periods differ), and a
-phase vocoder makes voices sound robotic. So the source is split into a vocals stem (a
-RoFormer model through audio-separator, run in the helper Python, see ext.py) and the
-residual (source - vocals, so the two always sum back to the source exactly). The vocals
-go through the built-in WSOLA, the residual through Signalsmith Stretch, and they are
-summed after aligning their latencies.
+A single splice cannot fit voice and music at once (their periods differ), and a phase
+vocoder makes voices sound robotic and smears attacks. So the source is split into a vocals
+stem (a RoFormer model through audio-separator, run in the helper Python, see ext.py) and the
+residual (source - vocals, so they always sum back to the source exactly). The vocals go
+through PSOLA (whole pitch periods, psola.py) or WSOLA; the residual is split again by
+lls-dsp into its tonal part, stretched with Signalsmith Stretch, and its attacks (effects,
+percussion), stretched with short-frame WSOLA. The stems are summed after aligning their
+latencies.
 """
 from __future__ import annotations
 
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
-from . import media, wsola
+from . import media, native, psola, wsola
 from .wavio import WavWriter, read_info
 
 BLOCK = 1 << 20
@@ -76,41 +79,94 @@ def start_split(src_path, src_st, tmp, opt, log) -> tuple[Helper, str, str, str]
     voc, rest_k = os.path.join(tmp, "vocals.wav"), os.path.join(tmp, "rest_k.wav")
     media.decode_to_wav(src_path, src_st, raw, src_st.channels, src_st.sample_rate)
     log(f"separating vocals in the background ({opt.sep_model})...")
+    # lls-dsp stretch options for the rest
+    opts = []
+    if opt.rest_block_ms > 0:
+        opts += ["--block", str(opt.rest_block_ms)]
+    if opt.rest_interval_ms > 0:
+        opts += ["--interval", str(opt.rest_interval_ms)]
+    if opt.hpss:
+        opts += ["--perc", os.path.join(tmp, "perc_k.wav")]
     job = Helper(opt, tmp, "separate", "separate", raw, voc, rest_k, opt.sep_model,
-                 opt.sep_model_dir)
+                 opt.sep_model_dir, *opts)
     return job, raw, voc, rest_k
 
 
+# the attacks' WSOLA in lls-dsp stretch --perc (rust/src/main.rs), for the report
+PERC_FRAME_MS, PERC_TOL_MS, PERC_MAX_MS = 12.0, 3.0, 5.0
+
+
 def stretch(split, tmp: str, k: float, opt, log, measure):
-    """Waits for the separation, then stretches the vocals (WSOLA, here) while the helper
-    stretches the rest (Signalsmith). measure(wav, step_s) gives a stretch latency.
-    Returns the two WAVs, the engine report and the vocals and rest latencies."""
+    """Waits for the separation, then stretches the vocals (here) while the helper stretches
+    the rest (Signalsmith, after splitting off its attacks when opt.hpss). measure(wav,
+    step_s) gives a stretch latency. Returns [(wav, latency)] with the vocals first, and the
+    engine report (its "order" names the stems)."""
     job, raw, voc, rest_k = split
-    job.send(repr(k))                     # the helper reads it once the vocals are out
+    # the helper's lls-dsp writes it next to rest_k (opt.hpss); in a batch the split ran
+    # in the prefetch's own dir, not in tmp
+    perc_k = os.path.join(os.path.dirname(rest_k), "perc_k.wav")
+    job.send(repr(k))
     log("  waiting for the vocals separation...")
     job.expect("vocals")
     if job.on_gpu_free:
         job.on_gpu_free()
     voc_k = os.path.join(tmp, "vocals_k.wav")
-    log(f"  vocals: WSOLA +-{opt.wsola_tol_ms:g} ms up to +-{opt.wsola_max_ms:g} ms; "
-        "rest: Signalsmith Stretch...")
-    eng = wsola.stretch(voc, voc_k, k, opt.wsola_tol_ms, opt.wsola_max_ms)
+    use_psola = opt.vocal_engine == "psola" and psola.available()
+    rest_eng = "Signalsmith" + (" (tonal) + WSOLA (attacks)" if opt.hpss else "")
+    if use_psola:
+        log(f"  vocals: PSOLA (within {opt.wsola_max_ms:g} ms); rest: {rest_eng}...")
+        eng = psola.stretch(voc, voc_k, k, min(2.0, opt.wsola_max_ms / 2), opt.wsola_max_ms)
+        log(f"  vocals: {eng['voiced_pct']:.0f}% voiced, {eng['periods']} periods "
+            f"({eng['forced']} forced), timing error median {eng['err_median_ms']:.2f} ms, "
+            f"max {eng['err_max_ms']:.2f} ms")
+    else:
+        log(f"  vocals: WSOLA +-{opt.wsola_tol_ms:g} ms up to +-{opt.wsola_max_ms:g} ms; "
+            f"rest: {rest_eng}...")
+        eng = wsola.stretch(voc, voc_k, k, opt.wsola_tol_ms, opt.wsola_max_ms)
     lat_v = measure(voc_k, 5.0)           # while the rest is still stretching
     job.wait()
     if not opt.keep_temp:
         os.remove(raw)
-    # Signalsmith's latency hardly varies: a window every 15 s is plenty
-    lat_r = measure(rest_k, 15.0)
-    if not opt.keep_temp:
         os.remove(voc)
-    return voc_k, rest_k, {"engine": "stems", "sep_model": opt.sep_model,
-                           "vocals": eng, "rest": {"engine": "signalsmith"}}, lat_v, lat_r
+    report = {"engine": "stems", "sep_model": opt.sep_model, "vocals": eng,
+              "rest": {"engine": "signalsmith", "block_ms": opt.rest_block_ms or 120.0,
+                       "interval_ms": opt.rest_interval_ms or (opt.rest_block_ms or 120.0) / 4}}
+    order = ["vocals", "rest"]
+    if not opt.hpss:
+        perc_k = None
+    elif not os.path.exists(perc_k):
+        log("  (this lls-dsp cannot split the attacks off; rest stretched whole)")
+        perc_k = None
+    with ThreadPoolExecutor(1) as ex:
+        # these latencies hardly vary: a window every 15 s is plenty
+        def measure_p():
+            try:
+                return measure(perc_k, 15.0)
+            except media.MediaError:
+                return None
+        lat_p = ex.submit(measure_p) if perc_k else None
+        lat_r = measure(rest_k, 15.0)
+        lat_p = lat_p.result() if lat_p else None
+    parts = [(voc_k, lat_v), (rest_k, lat_r)]
+    if perc_k:
+        report["attacks"] = {"engine": "wsola", "native": True, "frame_ms": PERC_FRAME_MS,
+                             "tol_ms": PERC_TOL_MS, "tol_max_ms": PERC_MAX_MS}
+        # sparse attacks can lock the measurement onto the tonal part; WSOLA's own latency
+        # is a few ms at most, so anything further off is a bad measurement
+        if lat_p is None or abs(lat_p - lat_r) > 0.005:
+            log("  attacks: latency not measurable, taken as the rest's")
+            lat_p = lat_r
+        parts.append((perc_k, lat_p))
+        order.append("attacks")
+    report["order"] = order
+    return parts, report
 
 
-def mix(voc_k: str, rest_k: str, out_wav: str, rest_shift: int, n_out: int):
-    """out = vocals + residual delayed by rest_shift samples (negative advances it)."""
-    vi, ri = read_info(voc_k), read_info(rest_k)
-    v, r = vi.memmap(), ri.memmap()
+def mix(voc_k: str, others: list[tuple[str, int]], out_wav: str, n_out: int):
+    """out = vocals + each other stem delayed by its shift in samples (negative advances it)."""
+    vi = read_info(voc_k)
+    v = vi.memmap()
+    rs = [(read_info(p).memmap(), s) for p, s in others]
     w = WavWriter(out_wav, n_out, vi.channels, vi.sr, vi.mask)
     for a in range(0, n_out, BLOCK):
         b = min(a + BLOCK, n_out)
@@ -118,8 +174,9 @@ def mix(voc_k: str, rest_k: str, out_wav: str, rest_shift: int, n_out: int):
         hi = min(b, len(v))
         if hi > a:
             y[:hi - a] += v[a:hi]
-        lo2, hi2 = max(a - rest_shift, 0), min(b - rest_shift, len(r))
-        if hi2 > lo2:
-            y[lo2 + rest_shift - a:hi2 + rest_shift - a] += r[lo2:hi2]
+        for r, sh in rs:
+            lo2, hi2 = max(a - sh, 0), min(b - sh, len(r))
+            if hi2 > lo2:
+                y[lo2 + sh - a:hi2 + sh - a] += r[lo2:hi2]
         w.write(y)
     w.close()

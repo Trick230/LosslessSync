@@ -25,7 +25,9 @@ def make_options(args, **extra) -> Options:
         ref_langs=tuple(x.strip() for x in args.ref_lang.split(",") if x.strip()),
         speed=args.speed, pitch=args.pitch, keep_engine=engine,
         wsola_tol_ms=args.wsola_tol_ms, wsola_max_ms=args.wsola_max_ms,
-        ext_python=ext or sys.executable, sep_model=args.sep_model, sep_model_dir=args.sep_model_dir, fill=args.fill, fade_ms=args.fade_ms,
+        ext_python=ext or sys.executable, sep_model=args.sep_model,
+        vocal_engine=args.vocal_engine, hpss=args.hpss, rest_block_ms=args.rest_block_ms,
+        rest_interval_ms=args.rest_interval_ms, sep_model_dir=args.sep_model_dir, fill=args.fill, fade_ms=args.fade_ms,
         fade_opening=args.fade_opening, match_loudness=args.match_loudness, codec=args.codec, bitrate=args.bitrate,
         language=args.language, tmp_dir=args.tmp, **extra)
 
@@ -73,6 +75,16 @@ def add_common(s):
     s.add_argument("--sep-model-dir", default=os.path.join(os.path.expanduser("~"), ".cache",
                                                            "losslesssync", "models"),
                    help="where separation models are kept (downloaded on first use)")
+    s.add_argument("--vocal-engine", choices=("psola", "wsola"), default="wsola",
+                   help="stems: stretcher for the vocals; wsola splices 24 ms frames "
+                        "(default), psola repeats whole pitch periods")
+    s.add_argument("--hpss", action=argparse.BooleanOptionalAction, default=False,
+                   help="stems: split the rest into tonal parts (Signalsmith) and attacks "
+                        "(WSOLA, keeps them sharp); default off")
+    s.add_argument("--rest-block-ms", type=float, default=0.0,
+                   help="stems: Signalsmith block length for the rest (default 120)")
+    s.add_argument("--rest-interval-ms", type=float, default=0.0,
+                   help="stems: Signalsmith block interval for the rest (default block / 4)")
     s.add_argument("--wsola-tol-ms", type=float, default=5.0,
                    help="WSOLA search tolerance in ms (default 5)")
     s.add_argument("--wsola-max-ms", type=float, default=10.0,

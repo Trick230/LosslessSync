@@ -34,6 +34,10 @@ class Options:
     wsola_max_ms: float = 10.0
     ext_python: str = ""          # Python with audio-separator and python-stretch (stems)
     sep_model: str = "vocals_mel_band_roformer.ckpt"
+    vocal_engine: str = "wsola"  # stems: vocals stretcher, psola | wsola
+    hpss: bool = False           # stems: split the rest into tonal (Signalsmith) and attacks (WSOLA)
+    rest_block_ms: float = 0.0   # stems: Signalsmith block and interval (0: its default 120/30)
+    rest_interval_ms: float = 0.0
     sep_model_dir: str = os.path.join(os.path.expanduser("~"), ".cache", "losslesssync", "models")   # ...widened up to this for a clearly better splice
     fill: str = "silence"        # silence | ref
     fade_ms: float = 300.0        # fade at edges next to a gap
@@ -411,34 +415,44 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, spli
     shift the pieces by the stretcher's latency, measured against the resampled source."""
     keep_wav = os.path.join(tmp, "keep.wav")
     if opt.keep_engine == "stems":
-        log("time-stretching source keeping its pitch (vocals WSOLA + rest Signalsmith)...")
+        log("time-stretching source keeping its pitch (separated stems)...")
         split = split or stems.start_split(src_path, src_st, tmp, opt, log)
         n_out = int(round(wavio.read_info(split[1]).frames * k))
         dec = {}
         def measure(path, step):
             dec[path] = media.decode_mono(path, media.audio_streams(path)[0], ANA_SR)
             return stretch_latency(inter16, dec[path], step)[0]
-        voc_k, rest_k, engine, lat_v, lat_r = stems.stretch(split, tmp, k, opt, log, measure)
-        shift = int(round((lat_r - lat_v) * src_st.sample_rate))  # latency > 0: content early
-        log(f"  stem latencies: vocals {lat_v * 1000:+.3f} ms, rest {lat_r * 1000:+.3f} ms")
-        engine["vocals"]["latency_ms"], engine["rest"]["latency_ms"] = lat_v * 1000, lat_r * 1000
-        stems.mix(voc_k, rest_k, keep_wav, shift, n_out)
+        parts, engine = stems.stretch(split, tmp, k, opt, log, measure)
+        (voc_k, lat_v), others = parts[0], parts[1:]
+        # latency > 0: content early; every stem is lined up with the vocals
+        shifts = [int(round((lat - lat_v) * src_st.sample_rate)) for _, lat in others]
+        log("  stem latencies: " + ", ".join(
+            f"{name} {lat * 1000:+.3f} ms" for name, (_, lat) in zip(engine["order"], parts)))
+        for name, (_, lat) in zip(engine["order"], parts):
+            engine[name]["latency_ms"] = lat * 1000
+        stems.mix(voc_k, [(p, s) for (p, _), s in zip(others, shifts)], keep_wav, n_out)
         if not opt.keep_temp:
-            os.remove(voc_k)
-            os.remove(rest_k)
+            for p, _ in parts:
+                os.remove(p)
         # the analysis copy of the mix, from the stem decodes (the resampler is linear)
-        # instead of decoding keep.wav again; the rest gets the fractional shift exactly
-        # (band-limited, in the frequency domain)
-        v16, r16 = dec.pop(voc_k), dec.pop(rest_k)
+        # instead of decoding keep.wav again; the other stems get their fractional shift
+        # exactly (band-limited, in the frequency domain)
         n16 = int(round(n_out * ANA_SR / src_st.sample_rate))
-        d = shift * ANA_SR / src_st.sample_rate
-        nf = sp_fft.next_fast_len(max(n16, len(r16)) + int(abs(d)) + 64, real=True)
-        R16 = sp_fft.rfft(r16, nf, workers=-1)
-        R16 *= np.exp(-2j * np.pi * np.fft.rfftfreq(nf) * d)
-        keep16 = sp_fft.irfft(R16, nf, workers=-1)[:n16].astype(np.float32)
-        del R16
+        v16 = dec.pop(voc_k)
+        keep16 = np.zeros(n16, np.float32)
         keep16[:min(n16, len(v16))] += v16[:n16]
-        del v16, r16
+        del v16
+        for (p, _), shift in zip(others, shifts):
+            r16 = dec.pop(p, None)
+            if r16 is None:                   # not decoded when its measurement failed
+                r16 = media.decode_mono(p, media.audio_streams(p)[0], ANA_SR)
+            d = shift * ANA_SR / src_st.sample_rate
+            nf = sp_fft.next_fast_len(max(n16, len(r16)) + int(abs(d)) + 64, real=True)
+            R16 = sp_fft.rfft(r16, nf, workers=-1)
+            del r16
+            R16 *= np.exp(-2j * np.pi * np.fft.rfftfreq(nf) * d)
+            keep16 += sp_fft.irfft(R16, nf, workers=-1)[:n16].astype(np.float32)
+            del R16
     elif opt.keep_engine == "wsola":
         log(f"time-stretching source keeping its pitch (WSOLA, +-{opt.wsola_tol_ms:g} ms, "
             f"up to +-{opt.wsola_max_ms:g} ms)...")

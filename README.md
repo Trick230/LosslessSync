@@ -57,6 +57,10 @@ pieces touch get a 4 ms splice guard.
 
   Then pass `--ext-python .venv-sep\Scripts\python.exe` (or set `LOSSLESSSYNC_EXT_PYTHON`).
 
+  The separation runs on CUDA (NVIDIA, or AMD with a ROCm torch build), else on an Intel
+  GPU with a torch XPU build, else through DirectML (any DX12 GPU) when `torch-directml`
+  is installed in that Python, else on the CPU (much slower).
+
   With `lls-dsp` built with `--features signalsmith`, the helper stretches the rest while
   the GPU is still separating the vocals, instead of afterwards (T05E01: 151 s -> 115-139 s;
   a 2-episode batch: 250 s -> 200 s, and it no longer holds the whole residual in memory).
@@ -146,6 +150,9 @@ Or `python -m losslesssync gui`.
 | `--keep-engine` | `auto` | stretcher for `--pitch keep` (`auto`: `stems` when `--ext-python` or `LOSSLESSSYNC_EXT_PYTHON` is set, else `wsola`): `wsola` (built in; no phase-vocoder smearing, timing error bounded by `--wsola-max-ms`) `rubberband` (R3), or `stems`: the vocals are separated (RoFormer, GPU) and stretched with WSOLA, the rest with Signalsmith Stretch, then summed; the two always add back to the source |
 | `--ext-python` | `$LOSSLESSSYNC_EXT_PYTHON`, else this Python | Python with `audio-separator` and `python-stretch`, for `stems` |
 | `--sep-model` | `vocals_mel_band_roformer.ckpt` | Vocals model for `stems` |
+| `--vocal-engine` | `wsola` | `stems`: stretcher for the vocals, `wsola` or `psola` (`lls-dsp psola`: repeats or drops whole pitch periods; lower latency, but a worse p95 sync error on the test episode) |
+| `--hpss` | off | `stems`: split the rest into tonal parts (Signalsmith) and attacks (short-frame WSOLA, keeps them sharp); needs `lls-dsp` built with `signalsmith`. With `--vocal-engine psola`: p95 1.20 vs 1.30 ms, but a 2-episode batch takes ~10 s longer |
+| `--rest-block-ms`, `--rest-interval-ms` | `120`, `30` | `stems`: Signalsmith block and hop for the rest |
 | `--sep-model-dir` | `~/.cache/losslesssync/models` | Where separation models are stored (downloaded on first use) |
 | `--wsola-tol-ms` | `5` | WSOLA search tolerance: events stay within this of their exact place |
 | `--wsola-max-ms` | `10` | WSOLA widens its search up to this only for a clearly better splice (fewer artefacts; set it equal to `--wsola-tol-ms` for a hard bound) |
