@@ -47,6 +47,7 @@ class Options:
     fade_opening: bool = False   # also fade into the opening titles
     dropout_fade_ms: float = 10.0  # fade at the edges of a signal dropout
     match_loudness: bool = True  # one constant gain so the track is as loud as the reference
+    verify_deep: bool = False    # stems: verify also on the reference without its vocals
     codec: str | None = None
     bitrate: str | None = None
     language: str = "por"
@@ -104,10 +105,12 @@ def verify_window(ref16: np.ndarray, out16: np.ndarray, t: float, win: float = 6
 
 
 def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float = 6.0,
-           step: float = 5.0, rest16: np.ndarray | None = None) -> dict:
+           step: float = 5.0, rest16: np.ndarray | None = None,
+           ref_rest16: np.ndarray | None = None) -> dict:
     """rest16: the source without its vocals, in the pieces' source timing (offset). Where
     the reference's dialogue (another language) hides the shared sound, the windows the
-    mix could not measure are measured again on it."""
+    mix could not measure are measured again on it, and then (ref_rest16, the reference
+    without its vocals) on both tracks without their vocals."""
     tp = [(t, p) for p in pieces
           for t in np.arange(p["start"] + 1.0, p["end"] - 1.0 - win + 1e-9, step)]
     ts = [t for t, _ in tp]
@@ -122,6 +125,14 @@ def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float 
             if r is not None:
                 res[i] = r
                 n_rest += 1
+        if ref_rest16 is not None:
+            miss = [i for i in miss if res[i] is None]
+            alt = pmap(lambda i: verify_window(ref_rest16, rest16, tp[i][0], win,
+                                               off=tp[i][1]["offset"]), miss)
+            for i, r in zip(miss, alt):
+                if r is not None:
+                    res[i] = r
+                    n_rest += 1
     # window centre and signed error (ms), None where nothing could be measured
     points = [[round(float(t) + win / 2, 3), None if r is None else round(r * 1000, 4)]
               for t, r in zip(ts, res)]
@@ -391,8 +402,17 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         prog("verify", 0.0)
         out_st = media.audio_streams(out_wav)[0]
         out16 = media.decode_mono(out_wav, out_st, ANA_SR)
-        report["verify"] = verify(ref16, out16, out_pieces, rest16=rest16)
-        del rest16
+        ref_rest16 = None
+        if opt.verify_deep and rest16 is not None:
+            log("separating the reference's vocals for verify...")
+            raw, voc = stems.separate_vocals(ref_path, ref_st, tmp, opt, "ref_sep")
+            ref_rest16 = (media.decode_mono(raw, media.audio_streams(raw)[0], ANA_SR)
+                          - media.decode_mono(voc, media.audio_streams(voc)[0], ANA_SR))
+        elif opt.verify_deep:
+            log("  --verify-deep needs --pitch keep with --keep-engine stems: skipped")
+        report["verify"] = verify(ref16, out16, out_pieces, rest16=rest16,
+                                  ref_rest16=ref_rest16)
+        del rest16, ref_rest16
         v = report["verify"]
         if v.get("measured"):
             on_rest = (f" ({v['measured_on_rest']} on the source without its vocals)"

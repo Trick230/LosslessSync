@@ -28,7 +28,8 @@ def make_options(args, **extra) -> Options:
         ext_python=ext or sys.executable, sep_model=args.sep_model,
         vocal_engine=args.vocal_engine, hpss=args.hpss, rest_block_ms=args.rest_block_ms,
         rest_interval_ms=args.rest_interval_ms, sep_model_dir=args.sep_model_dir, fill=args.fill, fade_ms=args.fade_ms,
-        fade_opening=args.fade_opening, match_loudness=args.match_loudness, codec=args.codec, bitrate=args.bitrate,
+        fade_opening=args.fade_opening, match_loudness=args.match_loudness,
+        verify_deep=args.verify_deep, codec=args.codec, bitrate=args.bitrate,
         language=args.language, tmp_dir=args.tmp, **extra)
 
 
@@ -100,6 +101,9 @@ def add_common(s):
     s.add_argument("--no-match-loudness", dest="match_loudness", action="store_false",
                    help="keep the source's level (default: one constant gain so the synced "
                         "track has the reference's integrated loudness, EBU R128)")
+    s.add_argument("--verify-deep", action="store_true",
+                   help="stems: also separate the reference's vocals, so verify measures "
+                        "more of the windows its dialogue hides (about a minute of GPU)")
     s.add_argument("--codec", choices=list(media.CODECS), help="override output codec")
     s.add_argument("--bitrate", help="bitrate for lossy codecs, e.g. 448k")
     s.add_argument("--language", default="por", help="language tag of the output track")

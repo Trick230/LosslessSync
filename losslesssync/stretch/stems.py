@@ -94,6 +94,21 @@ def start_split(src_path, src_st, tmp, opt, log) -> tuple[Helper, str, str, str]
     return job, raw, voc, rest_k
 
 
+def separate_vocals(path, st, tmp, opt, name: str) -> tuple[str, str]:
+    """Separate the vocals of a track (mono, 44.1 kHz: for analysis only) and wait for it.
+    Returns (mix, vocals) WAV paths."""
+    raw, voc = os.path.join(tmp, name + "_raw.wav"), os.path.join(tmp, name + "_vocals.wav")
+    media.decode_to_wav(path, st, raw, 1, 44100)
+    job = Helper(opt, tmp, name, "separate", raw, voc, "-", opt.sep_model, opt.sep_model_dir)
+    try:
+        job.expect("vocals")
+        job.wait()
+    except BaseException:
+        job.kill()
+        raise
+    return raw, voc
+
+
 # the attacks' WSOLA in lls-dsp stretch --perc (dsp/src/main.rs), for the report
 PERC_FRAME_MS, PERC_TOL_MS, PERC_MAX_MS = 12.0, 3.0, 5.0
 

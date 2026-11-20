@@ -107,7 +107,7 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
     the residual src - vocals is then stretched by K into REST_K as the stem comes out of
     the GPU, so little of the stretch is left when the vocals are done. lls-dsp gets the
     residual as it comes even before K (it splits off the attacks meanwhile); opts are its
-    stretch options."""
+    stretch options. REST_K "-": the vocals only."""
     import contextlib
     import gc
     import logging
@@ -134,56 +134,64 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
     x, sr = sf.read(src, dtype="float32", always_2d=True)
     n, ch = x.shape
 
-    # the residual's blocks, then None (or abort_mark); the ratio line comes in among them
-    rest: queue.Queue = queue.Queue()
-    threading.Thread(target=lambda: rest.put(sys.stdin.readline().strip()),
-                     daemon=True).start()
-    err = []
-    start, framed = _stretcher(rest_k_out, ch, sr)
+    if rest_k_out == "-":
+        # vocals only (verify's copy of the reference): no residual, no ratio on stdin
+        class _Drop:
+            @staticmethod
+            def put(_):
+                pass
+        rest, writer, err, abort_mark = _Drop(), None, [], object()
+    else:
+        # the residual's blocks, then None (or abort_mark); the ratio line comes in among them
+        rest: queue.Queue = queue.Queue()
+        threading.Thread(target=lambda: rest.put(sys.stdin.readline().strip()),
+                         daemon=True).start()
+        err = []
+        start, framed = _stretcher(rest_k_out, ch, sr)
 
-    def rest_writer():
-        ended = False
-        abort = None
-        try:
-            feed = set_k = None
-            if framed:
-                feed, set_k, close, abort = start(None, opts)
-            backlog = []
-            k = None
-            while not (ended and k is not None):
-                blk = rest.get()
-                if blk is abort_mark:
-                    ended = True
-                    raise RuntimeError("separation failed")
-                if blk is None:
-                    ended = True
-                elif isinstance(blk, str):
-                    if not blk:
-                        raise RuntimeError("no ratio: the caller went away")
-                    k = float(blk)
-                    if feed is None:
-                        feed, set_k, close, abort = start(k, opts)
-                        for b in backlog:
-                            feed(b)
-                        backlog.clear()
+        def rest_writer():
+            ended = False
+            abort = None
+            try:
+                feed = set_k = None
+                if framed:
+                    feed, set_k, close, abort = start(None, opts)
+                backlog = []
+                k = None
+                while not (ended and k is not None):
+                    blk = rest.get()
+                    if blk is abort_mark:
+                        ended = True
+                        raise RuntimeError("separation failed")
+                    if blk is None:
+                        ended = True
+                    elif isinstance(blk, str):
+                        if not blk:
+                            raise RuntimeError("no ratio: the caller went away")
+                        k = float(blk)
+                        if feed is None:
+                            feed, set_k, close, abort = start(k, opts)
+                            for b in backlog:
+                                feed(b)
+                            backlog.clear()
+                        else:
+                            set_k(k)
+                    elif feed is None:
+                        backlog.append(blk)
                     else:
-                        set_k(k)
-                elif feed is None:
-                    backlog.append(blk)
-                else:
-                    feed(blk)
-            close()
-        except BaseException as e:       # reported by the main thread
-            err.append(e)
-            if abort:
-                with contextlib.suppress(Exception):
-                    abort()
-            while not ended:
-                blk = rest.get()
-                ended = blk is None or blk is abort_mark
-    abort_mark = object()
-    writer = threading.Thread(target=rest_writer, daemon=True)
-    writer.start()
+                        feed(blk)
+                close()
+            except BaseException as e:       # reported by the main thread
+                err.append(e)
+                if abort:
+                    with contextlib.suppress(Exception):
+                        abort()
+                while not ended:
+                    blk = rest.get()
+                    ended = blk is None or blk is abort_mark
+        abort_mark = object()
+        writer = threading.Thread(target=rest_writer, daemon=True)
+        writer.start()
 
     # fp16 autocast: 1.9x faster on an RTX 4060, 66 dB from the fp32 stem (inaudible)
     tmp = tempfile.mkdtemp(dir=os.path.dirname(os.path.abspath(voc_out)))  # fallback's stem
@@ -286,7 +294,8 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
     except BaseException:
         voc.close()
         rest.put(abort_mark)             # stops lls-dsp instead of letting it finish
-        writer.join()
+        if writer:
+            writer.join()
         raise
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -299,7 +308,8 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
         torch.cuda.empty_cache()
     _PROTO.write("vocals\n")
     _PROTO.flush()
-    writer.join()
+    if writer:
+        writer.join()
     if err:
         raise err[0]
 
