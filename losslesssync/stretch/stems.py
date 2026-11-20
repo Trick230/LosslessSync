@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -94,19 +95,71 @@ def start_split(src_path, src_st, tmp, opt, log) -> tuple[Helper, str, str, str]
     return job, raw, voc, rest_k
 
 
-def separate_vocals(path, st, tmp, opt, name: str) -> tuple[str, str]:
+def separate_vocals(path, st, tmp, opt, name: str, started=None) -> tuple[str, str]:
     """Separate the vocals of a track (mono, 44.1 kHz: for analysis only) and wait for it.
-    Returns (mix, vocals) WAV paths."""
+    started(job) is called once the helper runs. Returns (mix, vocals) WAV paths."""
     raw, voc = os.path.join(tmp, name + "_raw.wav"), os.path.join(tmp, name + "_vocals.wav")
     media.decode_to_wav(path, st, raw, 1, 44100)
     job = Helper(opt, tmp, name, "separate", raw, voc, "-", opt.sep_model, opt.sep_model_dir)
     try:
+        if started:
+            started(job)
         job.expect("vocals")
         job.wait()
     except BaseException:
         job.kill()
         raise
     return raw, voc
+
+
+class RefSeparation:
+    """--verify-deep: the reference's vocals, separated as soon as the source's separation
+    frees the GPU (while the source is stretched on the CPU), so only one separation uses
+    the GPU at a time; whatever waited for the GPU (in a batch, the next episode's
+    separation) starts after it."""
+
+    def __init__(self, path, st, tmp, opt, job: Helper):
+        self.args = (path, st, tmp, opt, "ref_sep")
+        self.after, job.on_gpu_free = job.on_gpu_free, self._start
+        self.thread = self.job = self.out = self.err = None
+        self.closed = False
+        self.lock = threading.Lock()
+
+    def _start(self):
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        try:
+            self.out = separate_vocals(*self.args, started=self._started)
+        except BaseException as e:
+            self.err = e
+        finally:
+            if self.after:
+                self.after()
+
+    def _started(self, job):
+        with self.lock:
+            self.job = job
+            if self.closed:
+                job.kill()
+
+    def result(self) -> tuple[str, str] | None:
+        """(mix, vocals) WAV paths; None if it never started (the source was not stretched)."""
+        if self.thread is None:
+            return None
+        self.thread.join()
+        if self.err:
+            raise self.err
+        return self.out
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+            if self.job:
+                self.job.kill()
+        if self.thread:
+            self.thread.join()
 
 
 # the attacks' WSOLA in lls-dsp stretch --perc (dsp/src/main.rs), for the report

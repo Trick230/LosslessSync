@@ -188,14 +188,19 @@ def sync(ref_path: str, src_path: str, out_path: str | None, opt: Options,
 
     out_dir = os.path.dirname(os.path.abspath(out_path or opt.report or src_path))
     tmp = tempfile.mkdtemp(prefix="losslesssync_", dir=opt.tmp_dir or out_dir)
+    ref_sep = None
     try:
         if split:
             log("vocals separation already started in the background")
         elif uses_stems(out_path, opt):
             split = stems.start_split(src_path, src_st, tmp, opt, log)
+        if split and opt.verify_deep:
+            ref_sep = stems.RefSeparation(ref_path, ref_st, tmp, opt, split[0])
         return _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st,
-                     src_st, tmp, split)
+                     src_st, tmp, split, ref_sep)
     finally:
+        if ref_sep:
+            ref_sep.close()
         if split:
             split[0].kill()
         if opt.keep_temp:
@@ -205,7 +210,7 @@ def sync(ref_path: str, src_path: str, out_path: str | None, opt: Options,
 
 
 def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src_st, tmp,
-          split=None):
+          split=None, ref_sep=None):
     log("decoding analysis audio (mono 16 kHz)...")
     prog("decode", 0.0)
     ref16 = media.decode_mono(ref_path, ref_st, ANA_SR)
@@ -403,8 +408,13 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         out16 = media.decode_mono(out_wav, out_st, ANA_SR)
         ref_rest16 = None
         if opt.verify_deep and rest16 is not None:
-            log("separating the reference's vocals for verify...")
-            raw, voc = stems.separate_vocals(ref_path, ref_st, tmp, opt, "ref_sep")
+            got = ref_sep.result() if ref_sep else None
+            if got:
+                log("  the reference's vocals were separated while the source was stretched")
+                raw, voc = got
+            else:
+                log("separating the reference's vocals for verify...")
+                raw, voc = stems.separate_vocals(ref_path, ref_st, tmp, opt, "ref_sep")
             ref_rest16 = (media.decode_mono(raw, media.audio_streams(raw)[0], ANA_SR)
                           - media.decode_mono(voc, media.audio_streams(voc)[0], ANA_SR))
         elif opt.verify_deep:
