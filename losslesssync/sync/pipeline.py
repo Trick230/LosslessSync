@@ -303,6 +303,9 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     segs = cuts.place_segments(segs, Rb, Sb, ref_dur, opt.chunk_s, k, ref16, inter16)
     del Rb, Sb
     segs = cuts.refine_edges(segs, inter16, ref_dur, ref16)
+    log("looking for parts at another speed...")
+    extra = respeed.find(segs, ref16, inter16, ref_dur, log, stretched=mode != "resample")
+    # pieces, dropouts and the opening after respeed: an edge next to such a part may move
     pieces = [{"start": s.ref_start, "end": s.ref_end, "offset": s.offset} for s in segs]
     drops = sorted(gaps.dropout_gaps(segs, ref16))
     for i in drops:
@@ -323,11 +326,6 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     if opening is not None:
         pieces[opening]["fade_in"] = False
         log(f"  opening titles at {fmt_t(segs[opening].ref_start)}: no fade-in")
-
-    log("looking for parts at another speed...")
-    extra = respeed.find(segs, ref16, inter16, ref_dur, log, stretched=mode != "resample")
-    for pc, sg in zip(pieces, segs):              # an edge next to such a part may move
-        pc["start"], pc["end"] = sg.ref_start, sg.ref_end
 
     report = {
         "reference": ref_path, "reference_track": ref_st.aidx, "source": src_path,
@@ -370,7 +368,8 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     if not opt.analyze_only and out_path:
         pool = ThreadPoolExecutor(1)
         ref_loud = (pool.submit(media.loudness, ref_path, ref_st,
-                                [(p["start"], p["end"]) for p in pieces])
+                                [(p["start"], p["end"]) for p in pieces]
+                                + [(x["ref_start"], x["ref_end"]) for x in extra])
                     if opt.match_loudness else None)     # while the source is stretched
         pool.shutdown(wait=False)
         try:
@@ -384,7 +383,7 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
                 futures_wait([ref_loud])
             raise
         codec = opt.codec or media.EXT_CODEC.get(os.path.splitext(out_path)[1].lower(), "flac")
-        gain = (match_loudness(ref_loud, inter_wav, info, pieces, codec, log, report)
+        gain = (match_loudness(ref_loud, inter_wav, info, pieces, extra, codec, log, report)
                 if ref_loud else 1.0)
         n_out = int(round(ref_dur * info.sr))
         out_pieces = pieces + extra_pieces(src_path, src_st, k, extra, mode, opt, tmp, info, log)
@@ -494,16 +493,18 @@ def extra_pieces(src_path, src_st, k, extra, mode, opt, tmp, info, log) -> list[
     return out
 
 
-def match_loudness(ref_loud, inter_wav: str, info, pieces, codec: str, log, report) -> float:
+def match_loudness(ref_loud, inter_wav: str, info, pieces, extra, codec: str, log, report) -> float:
     """The constant gain that gives the synced track the reference's integrated loudness,
-    both measured over the synced pieces only. One multiplier for the whole track: no
-    compression or limiting, so the dynamics and the sound stay the original's. Capped so
-    it cannot push peaks into clipping."""
+    both measured over the synced pieces only (the parts at their own speed included). One
+    multiplier for the whole track: no compression or limiting, so the dynamics and the
+    sound stay the original's. Capped so it cannot push peaks into clipping."""
     try:
         ref_loud = ref_loud.result()
         src_loud = media.loudness(inter_wav, media.audio_streams(inter_wav)[0],
                                   [(p["start"] - p["offset"], p["end"] - p["offset"])
-                                   for p in pieces])
+                                   for p in pieces]
+                                  + [(x["src_start"], x["src_start"] + (x["ref_end"] - x["ref_start"])
+                                      / x["speed"]) for x in extra])
     except media.MediaError as e:
         log(f"  loudness: {str(e).splitlines()[0][:200]}")
         ref_loud = src_loud = None
