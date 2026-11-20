@@ -405,11 +405,17 @@ def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float,
 # long enough to tell matched from unmatched audio
 _FINE_HOP = FLUX_HOP / ANA_SR
 _FINE_NFFT = 256
+# where the edge lies: a 16 ms window straddling a cut is dominated by its louder side,
+# which pulls the edge up to ~8 ms towards the quiet side at a +-20 dB step; 4 ms windows
+# keep that under ~2 ms (the 16 ms frames still decide whether there is an edge at all)
+_LOC_NFFT = 64
+# 16 ms frames whose window reaches across the located edge are left out of the check
+_GUARD = _FINE_NFFT // 2 // FLUX_HOP
 
 
-def _fine_coh(ref16, src16, offset: float, t0: float, t1: float):
+def _fine_coh(ref16, src16, offset: float, t0: float, t1: float, n_fft: int = _FINE_NFFT):
     f0, f1 = int(np.floor(t0 / _FINE_HOP)), int(np.ceil(t1 / _FINE_HOP))
-    c = coherence_sim(ref16, src16, offset, f0, f1, n_fft=_FINE_NFFT, smooth=1, hop=_FINE_HOP)
+    c = coherence_sim(ref16, src16, offset, f0, f1, n_fft=n_fft, smooth=1, hop=_FINE_HOP)
     return f0, np.where(c > -1e2, c, 0.0)
 
 
@@ -424,6 +430,14 @@ def _clear_edge(c_in: np.ndarray, c_out: np.ndarray, lv: float) -> bool:
     return a >= 0.5 * lv and a - b >= max(0.4 * lv, 0.2)
 
 
+def _agrees(c_in: np.ndarray, c_out: np.ndarray, lv: float) -> bool:
+    """A side whose edge is smeared but not contradicted: matched inside, less outside."""
+    if len(c_in) < 3 or len(c_out) < 3:
+        return False
+    a, b = float(np.mean(c_in)), float(np.mean(c_out))
+    return a >= 0.5 * lv and a - b >= 0.1
+
+
 def _refine_coherent(segs: list[Segment], ref16, src16, ref_dur: float,
                      search: float = 0.04, ctx: float = 0.3, min_coh: float = 0.25,
                      side: int = 15):
@@ -431,12 +445,18 @@ def _refine_coherent(segs: list[Segment], ref16, src16, ref_dur: float,
     search work on 10 ms frames (or a level dip), which leaves up to a frame of the wrong
     audio at each cut. Each cut moves by at most search: two neighbours that the source
     or the ref runs on across switch where A's coherence hands over to B's; any other
-    edge ends (starts) where its own coherence drops below half its level inside. A level
-    step across the cut biases that by up to ~5 ms (+-20 dB)."""
+    edge ends (starts) where its own coherence drops below half its level inside. The
+    edge is located on 4 ms frames (_LOC_NFFT) and checked on 16 ms ones."""
     sr_end = len(ref16) / ANA_SR
+    pad = (_GUARD + side) * _FINE_HOP     # the 16 ms check reaches past the search span
 
-    def level(s, t0, t1):
-        _, c = _fine_coh(ref16, src16, s.offset, max(t0, s.ref_start), min(t1, s.ref_end))
+    def check(off, t0, t1, f0):
+        """16 ms coherence over [t0 - pad, t1 + pad], indexed like frames from f0."""
+        fc, c = _fine_coh(ref16, src16, off, t0 - pad, t1 + pad)
+        return lambda i, j: c[max(0, i + f0 - fc):max(0, j + f0 - fc)]
+
+    def level(s, t0, t1, n_fft=_FINE_NFFT):
+        _, c = _fine_coh(ref16, src16, s.offset, max(t0, s.ref_start), min(t1, s.ref_end), n_fft)
         return float(np.median(c)) if len(c) else 0.0
 
     def one_sided(s, kind):
@@ -446,14 +466,16 @@ def _refine_coherent(segs: list[Segment], ref16, src16, ref_dur: float,
             level(s, t + search, t + search + ctx)
         if lv < min_coh or hi - lo < 4 * _FINE_HOP:
             return
-        f0, c = _fine_coh(ref16, src16, s.offset, lo, hi)
-        d = c - 0.5 * lv
+        lv_l = level(s, t - ctx - search, t - search, _LOC_NFFT) if kind == "end" else             level(s, t + search, t + search + ctx, _LOC_NFFT)
+        f0, cl = _fine_coh(ref16, src16, s.offset, lo, hi, _LOC_NFFT)
+        c = check(s.offset, lo, hi, f0)
+        d = cl - 0.5 * lv_l
         cs = np.concatenate([[0.0], np.cumsum(d)])
         # boundary j: frames < j are in the segment (end) or out of it (start)
         sc = cs if kind == "end" else cs[-1] - cs
         tb = (f0 + np.arange(len(cs)) - 0.5) * _FINE_HOP
         j = int(np.argmax(sc - 1e-6 * np.abs(tb - t)))
-        pre, post = c[max(0, j - side):j], c[j:j + side]
+        pre, post = c(j - _GUARD - side, j - _GUARD), c(j + _GUARD, j + _GUARD + side)
         if not _clear_edge(pre if kind == "end" else post, post if kind == "end" else pre, lv):
             return
         if kind == "end":
@@ -470,19 +492,23 @@ def _refine_coherent(segs: list[Segment], ref16, src16, ref_dur: float,
         lv = min(level(a, lo - ctx, lo), level(b, hi + g, hi + g + ctx))
         if lv < min_coh:
             return False
-        f0, ca = _fine_coh(ref16, src16, a.offset, lo, hi)
-        _, cb = _fine_coh(ref16, src16, b.offset, lo + g, hi + g)
-        n = min(len(ca), len(cb))
+        f0, la = _fine_coh(ref16, src16, a.offset, lo, hi, _LOC_NFFT)
+        fb, lb = _fine_coh(ref16, src16, b.offset, lo + g, hi + g, _LOC_NFFT)
+        n = min(len(la), len(lb))
         if n < 4:
             return False
-        ca, cb = ca[:n], cb[:n]
-        PA = np.concatenate([[0.0], np.cumsum(ca)])
-        PB = np.concatenate([[0.0], np.cumsum(cb)])
+        ca, cb = check(a.offset, lo, hi, f0), check(b.offset, lo + g, hi + g, fb)
+        PA = np.concatenate([[0.0], np.cumsum(la[:n])])
+        PB = np.concatenate([[0.0], np.cumsum(lb[:n])])
         tb = (f0 + np.arange(n + 1) - 0.5) * _FINE_HOP
         m = int(np.argmax(PA + PB[n] - PB - 1e-6 * np.abs(tb - t)))
         # A hands over to B: A matched before the cut and not after, B the other way round
-        if not (_clear_edge(ca[max(0, m - side):m], ca[m:m + side], lv) and
-                _clear_edge(cb[m:m + side], cb[max(0, m - side):m], lv)):
+        bef, aft = (m - _GUARD - side, m - _GUARD), (m + _GUARD, m + _GUARD + side)
+        ok_a, ok_b = _clear_edge(ca(*bef), ca(*aft), lv), _clear_edge(cb(*aft), cb(*bef), lv)
+        # a lossy broadcast smears its own splice over a codec frame: one clear side is
+        # enough when the other does not contradict it (matched on its own side, less outside)
+        if not (ok_a and ok_b or ok_a and _agrees(cb(*aft), cb(*bef), lv)
+                or ok_b and _agrees(ca(*bef), ca(*aft), lv)):
             return False
         a.ref_end, b.ref_start = float(tb[m]), float(tb[m]) + g
         return True
