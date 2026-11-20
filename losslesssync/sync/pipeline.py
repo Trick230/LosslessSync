@@ -19,7 +19,7 @@ from ..audio import media, wavio
 from ..audio.render import render
 from ..audio.wavio import read_info
 from ..stretch import stems, wsola
-from . import cuts, gaps, segments, speed
+from . import cuts, gaps, respeed, segments, speed
 from .features import ANA_SR, features, pmap
 
 SPEED_ALIASES = {"pal": 1001 / 960, "pal24": 25 / 24, "ntsc": 960 / 1001, "1": 1.0, "none": 1.0}
@@ -114,7 +114,8 @@ def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float 
     res = pmap(lambda t: verify_window(ref16, out16, t, win), ts)
     n_rest = 0
     if rest16 is not None:
-        miss = [i for i, r in enumerate(res) if r is None]
+        # (a piece at its own speed has no rest16 timing)
+        miss = [i for i, r in enumerate(res) if r is None and "speed" not in tp[i][1]]
         alt = pmap(lambda i: verify_window(ref16, rest16, tp[i][0], win,
                                            off=tp[i][1]["offset"]), miss)
         for i, r in zip(miss, alt):
@@ -312,6 +313,11 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         pieces[opening]["fade_in"] = False
         log(f"  opening titles at {fmt_t(segs[opening].ref_start)}: no fade-in")
 
+    log("looking for parts at another speed...")
+    extra = respeed.find(segs, ref16, inter16, ref_dur, log, stretched=mode != "resample")
+    for pc, sg in zip(pieces, segs):              # an edge next to such a part may move
+        pc["start"], pc["end"] = sg.ref_start, sg.ref_end
+
     report = {
         "reference": ref_path, "reference_track": ref_st.aidx, "source": src_path,
         "source_track": src_st.aidx, "speed": k, "speed_fraction": str(Fraction(k).limit_denominator(100000)),
@@ -321,16 +327,22 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     }
     covered = 0.0
     prev = 0.0
-    for s in segs:
-        if s.ref_start - prev > 0.01:
-            report["gaps"].append({"start": prev, "end": s.ref_start})
-        prev = s.ref_end
-        covered += s.ref_end - s.ref_start
-        report["segments"].append({
-            "ref_start": s.ref_start, "ref_end": s.ref_end,
-            "src_start": (s.ref_start - s.offset) / k, "src_end": (s.ref_end - s.offset) / k,
-            "offset_s": s.offset, "method": s.method, "spread_ms": s.spread_ms,
-            "anchors": len(s.anchors), "fine_windows": len(s.fine)})
+    rows = [{"ref_start": s.ref_start, "ref_end": s.ref_end,
+             "src_start": (s.ref_start - s.offset) / k, "src_end": (s.ref_end - s.offset) / k,
+             "offset_s": s.offset, "method": s.method, "spread_ms": s.spread_ms,
+             "anchors": len(s.anchors), "fine_windows": len(s.fine)} for s in segs]
+    rows += [{"ref_start": x["ref_start"], "ref_end": x["ref_end"],
+              "src_start": x["src_start"] / k,
+              "src_end": (x["src_start"] + (x["ref_end"] - x["ref_start"]) / x["speed"]) / k,
+              "offset_s": x["ref_start"] - x["src_start"], "method": "speed",
+              "speed": x["speed"], "spread_ms": None, "anchors": 0,
+              "fine_windows": x["windows"]} for x in extra]
+    for r in sorted(rows, key=lambda r: r["ref_start"]):
+        if r["ref_start"] - prev > 0.01:
+            report["gaps"].append({"start": prev, "end": r["ref_start"]})
+        prev = r["ref_end"]
+        covered += r["ref_end"] - r["ref_start"]
+        report["segments"].append(r)
     if ref_dur - prev > 0.01:
         report["gaps"].append({"start": prev, "end": ref_dur})
     report["coverage_pct"] = covered / ref_dur * 100
@@ -364,6 +376,8 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         gain = (match_loudness(ref_loud, inter_wav, info, pieces, codec, log, report)
                 if ref_loud else 1.0)
         n_out = int(round(ref_dur * info.sr))
+        out_pieces = pieces + extra_pieces(src_path, src_st, k, extra, mode, opt, tmp, info, log)
+        out_pieces.sort(key=lambda p: p["start"])
         fill = None
         if opt.fill == "ref":
             fill_wav = os.path.join(tmp, "fill.wav")
@@ -372,12 +386,12 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         log("rendering...")
         prog("render", 0.0)
         out_wav = os.path.join(tmp, "out.wav")
-        render(info, pieces, n_out, out_wav, fill, fade_ms=opt.fade_ms, gain=gain)
+        render(info, out_pieces, n_out, out_wav, fill, fade_ms=opt.fade_ms, gain=gain)
         log("verifying result against the reference...")
         prog("verify", 0.0)
         out_st = media.audio_streams(out_wav)[0]
         out16 = media.decode_mono(out_wav, out_st, ANA_SR)
-        report["verify"] = verify(ref16, out16, pieces, rest16=rest16)
+        report["verify"] = verify(ref16, out16, out_pieces, rest16=rest16)
         del rest16
         v = report["verify"]
         if v.get("measured"):
@@ -422,6 +436,42 @@ def _peak_dbfs(info) -> float:
     for a in range(0, len(m), 1 << 20):
         peak = max(peak, float(np.abs(m[a:a + (1 << 20)]).max(initial=0.0)))
     return 20 * np.log10(peak) if peak > 0 else -200.0
+
+
+def extra_pieces(src_path, src_st, k, extra, mode, opt, tmp, info, log) -> list[dict]:
+    """Render pieces for the parts at their own speed (respeed.find), each from its own WAV
+    of the source corrected by k in the main mode, then resampled by speed (in keep mode
+    with Rubber Band, its latency measured against the resampled piece)."""
+    out = []
+    keep = opt.pitch == "keep" and abs(k - 1) > 1e-4
+    sr = src_st.sample_rate
+    for i, x in enumerate(extra):
+        c = x["speed"]
+        ia = x["src_start"] - 1.0
+        ib = x["src_start"] + (x["ref_end"] - x["ref_start"]) / c + 1.0
+        n0, n1 = max(0, int(np.floor(ia / k * sr))), int(np.ceil(ib / k * sr))
+        wav = os.path.join(tmp, f"piece{i}.wav")
+        media.make_piece(src_path, src_st, n0, n1, k, c, "keep" if keep else mode, wav)
+        pi = read_info(wav)
+        if pi.sr != info.sr or pi.channels != info.channels:
+            raise media.MediaError(f"piece {i}: layout {pi.channels}ch/{pi.sr} Hz differs")
+        lat = 0.0
+        if keep:
+            res_wav = os.path.join(tmp, f"piece{i}_res.wav")
+            media.make_piece(src_path, src_st, n0, n1, k, c, "resample", res_wav)
+            a16 = media.decode_mono(res_wav, media.audio_streams(res_wav)[0], ANA_SR)
+            b16 = media.decode_mono(wav, media.audio_streams(wav)[0], ANA_SR)
+            ts = np.arange(1.0, min(len(a16), len(b16)) / ANA_SR - 4.0, 1.0)
+            got = [r[0] for r in (segments.fine_measure(a16, b16, t, 0.0, 3.0, max_lag=0.2)
+                                  for t in ts) if r is not None]
+            if len(got) >= 3:
+                lat = float(np.median(got))
+            else:
+                log(f"  piece {i}: stretch latency not measurable, taken as 0")
+        # its sample 0 is the corrected source at n0 / sr * k; ref = offset + that * c
+        out.append({"start": x["ref_start"], "end": x["ref_end"], "src": pi, "speed": c,
+                    "offset": x["offset"] + (n0 / sr * k - x["src_offset"]) * c + lat})
+    return out
 
 
 def match_loudness(ref_loud, inter_wav: str, info, pieces, codec: str, log, report) -> float:

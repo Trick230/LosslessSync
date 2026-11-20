@@ -8,6 +8,7 @@ in a row, on top of the usual edits.
 --ad inserts a 30 s ad break into the TV at ref 100 s (the ref runs on across it).
 --recap starts the TV with a 20 s recap made of later programme (repeated content).
 --intro replaces the first 20 s of the programme with a different 25 s TV intro.
+--credits plays the last 15 s of the programme (the end credits) 25% faster on the TV.
 --channels sets the TV layout: mono, stereo (default) or 5.1 (AC-3 instead of MP2).
 """
 from __future__ import annotations
@@ -17,6 +18,8 @@ import json
 import os
 import subprocess
 import sys
+
+from fractions import Fraction
 
 import numpy as np
 from scipy import signal
@@ -118,6 +121,7 @@ def main():
     ap.add_argument("--ad", action="store_true")
     ap.add_argument("--recap", action="store_true")
     ap.add_argument("--intro", action="store_true")
+    ap.add_argument("--credits", action="store_true")
     ap.add_argument("--channels", type=int, default=2, choices=[1, 2, 6])
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -176,6 +180,7 @@ def main():
     if a.intro:
         edits[0] = (20, edits[0][1])
         lead[20] = 25.0
+    fast = {385.0: 1.25} if a.credits else {}
     ideal = np.zeros_like(prog)
     for s, e in edits:
         ideal[int(s * SR):int(e * SR)] = prog[int(s * SR):int(e * SR)]
@@ -185,23 +190,28 @@ def main():
 
     r2 = np.random.default_rng(a.seed + 300)
     junk = lambda d: np.stack([note_track(r2, d, 2) + effects_track(r2, d, 2)] * 2, 1) * 0.8
-    parts, segments, pos = [], [], 0.0
+    parts, segments = [], []
     if a.recap:
         for s, e in ((300.0, 310.0), (210.0, 220.0)):
             parts.append(prog_tv[int(s * SR):int(e * SR)])
-            pos += e - s
     for s, e in edits:
         if lead[s]:
             parts.append(junk(lead[s]))
-            pos += lead[s]
-        cur = s
-        for t, d, kind in sorted(drops) + [(e, 0.0, "end")]:
-            if kind not in ("skip", "end") or not (s <= t <= e):
+        cur, rate = s, 1.0
+        for t, d, kind in sorted(drops + [(t, 0.0, "fast") for t in fast]) + [(e, 0.0, "end")]:
+            if kind not in ("skip", "end", "fast") or not (s <= t <= e):
                 continue
-            parts.append(prog_tv[int(cur * SR):int(t * SR)])
-            segments.append({"ref_start": cur, "ref_end": t, "offset_corrected": cur - pos})
-            pos += t - cur
+            piece = prog_tv[int(cur * SR):int(t * SR)]
+            seg = {"ref_start": cur, "ref_end": t}
+            if rate != 1.0:
+                fr = Fraction(rate).limit_denominator(100)
+                piece = signal.resample_poly(piece, fr.denominator, fr.numerator, axis=0)
+                seg["speed"] = rate
+            parts.append(piece.astype(np.float32))
+            segments.append(seg)
             cur = t + d
+            if kind == "fast":
+                rate = fast[t]
     parts.append(junk(5))
     tv = np.concatenate(parts)
     truth = {"segments": segments, "variant": a.variant,

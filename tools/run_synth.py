@@ -3,7 +3,8 @@
 usage: python tools/run_synth.py [OUT_ROOT] [--cases pal,tempo,none,drop_pal,...]
 
 Cases: pal, tempo, none (the TV speed-up), drop_<variant> (with TV signal dropouts), ad,
-recap, intro (an ad break, a recap at the start, a different intro), mono and surround
+recap, intro, credits, credits_tempo (an ad break, a recap at the start, a different intro,
+sped-up credits, also on a time-stretched source), mono and surround
 (TV layouts). Each runs make_synth.py, `losslesssync sync` and check.py; exit code 0 when
 every case passes.
 """
@@ -23,6 +24,8 @@ CASES = {
     "drop_none": ["--variant", "none", "--dropouts"],
     "ad": ["--variant", "pal", "--ad"], "recap": ["--variant", "pal", "--recap"],
     "intro": ["--variant", "pal", "--intro"],
+    "credits": ["--variant", "pal", "--credits"],
+    "credits_tempo": ["--variant", "tempo", "--credits"],
     "mono": ["--variant", "pal", "--channels", "1"],
     "surround": ["--variant", "none", "--channels", "6"],
 }

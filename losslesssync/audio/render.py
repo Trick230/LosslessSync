@@ -41,7 +41,8 @@ def _copy(w: WavWriter, src: np.ndarray, a: int, n: int, fade_in: int, fade_out:
 def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
            fill: WavInfo | None = None, fade_ms: float = 300.0, splice_ms: float = 4.0,
            gain: float = 1.0):
-    """pieces: sorted, non-overlapping {'start','end' (ref s), 'offset' (s)} on the ref timeline.
+    """pieces: sorted, non-overlapping {'start','end' (ref s), 'offset' (s)} on the ref timeline,
+    read from inter, or from their own 'src' (a WavInfo of the same layout) when they have one.
     The source is scaled by gain (the reference fill is not).
 
     Edges next to a gap fade over fade_ms (inside the piece, so no extra source is used);
@@ -68,7 +69,8 @@ def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
             Fo = ms(p["fade_out_ms"]) if "fade_out_ms" in p else F
             fi = 0 if n0 == 0 else (Fi if n0 > cur and p.get("fade_in", True) else S)
             fo = 0 if n1 >= n_out else (Fo if nxt > n1 else S)
-            _copy(w, src, n0 - shift, n, min(fi, n // 2), min(fo, n // 2), gain)
+            _copy(w, p["src"].memmap() if "src" in p else src, n0 - shift, n,
+                  min(fi, n // 2), min(fo, n // 2), gain)
         cur = n1
     if cur < n_out:
         _gap(w, ref, cur, n_out - cur, S, n_out)

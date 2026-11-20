@@ -170,6 +170,21 @@ def make_intermediate(path: str, stream: AudioStream, k: float, mode: str,
     return np.frombuffer(r.stdout, dtype=np.float32)
 
 
+def make_piece(path: str, stream: AudioStream, n0: int, n1: int, k: float, c: float,
+               mode: str, out_wav: str):
+    """Source samples n0..n1 (counted from the first decoded sample) as a float WAV: a piece
+    that plays c times faster than the rest (see sync/respeed.py). It gets the main speed
+    correction k in mode, then plain resampling by c (its speed-up shifted the pitch)."""
+    sr = stream.sample_rate
+    sp = (speed_filter(k * c, sr, "resample") if mode == "resample"
+          else f"{speed_filter(k, sr, mode)},{speed_filter(c, sr, 'resample')}")
+    af = f"asetpts=N/SR/TB,atrim=start_sample={n0}:end_sample={n1},asetpts=PTS-STARTPTS,{sp}"
+    cmd = [tool("ffmpeg"), "-nostdin", "-v", "error", "-y", *_decoder_opts(stream), "-i", path,
+           "-map", f"0:a:{stream.aidx}", "-af", af, "-c:a", "pcm_f32le", "-rf64", "auto",
+           "-f", "wav", out_wav]
+    run(cmd, capture=False)
+
+
 def decode_to_wav(path: str, stream: AudioStream, out_wav: str, channels: int, sr: int):
     cmd = [tool("ffmpeg"), "-nostdin", "-v", "error", "-y", *_decoder_opts(stream), "-i", path,
            "-map", f"0:a:{stream.aidx}", "-ac", str(channels),

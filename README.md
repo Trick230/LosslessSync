@@ -26,6 +26,7 @@ losslessly (FLAC 24-bit) by default.
 | PAL speed-up (25 vs 23.976 / 24 fps) and other common ratios | Detected and snapped to the exact fraction |
 | Pitch kept or not | Detects whether the broadcaster resampled (pitch shifted) or time-stretched (pitch kept) |
 | Commercial breaks, cut scenes, bumpers, truncated credits | The source is split into segments, each with its own offset |
+| Parts at another speed (sped-up end credits, an intro from another release) | Each found in the holes the rest leaves and played at its own speed |
 | Edits inside continuous source | The splice is located in the source and both edges are cut there |
 | Opening titles | Detected and started without a fade-in |
 | Signal dropouts (lost or muted audio), several in a row | Detected, reported, and synced across |
@@ -191,7 +192,10 @@ Or `python -m losslesssync gui`.
    as muted.
 6. **Cut points.** Cuts between segments are placed where the similarity to the reference
    changes. Where the source runs on across a cut, the edit is located in the source itself.
-7. **Render.** Pieces are copied from the speed-corrected source at their offsets, with fades
+7. **Parts at another speed.** Holes of 4 s or more left in the reference are searched again
+   at relative speeds from x0.75 to x1.34 against the source the neighbours leave unused;
+   a match gets its own speed (refined with GCC-PHAT) and its own sped-up copy of the source.
+8. **Render.** Pieces are copied from the speed-corrected source at their offsets, with fades
    at gaps. The result is then measured against the reference and encoded.
 
 ### Source layout
@@ -199,7 +203,7 @@ Or `python -m losslesssync gui`.
 | Path | What is there |
 |---|---|
 | `losslesssync/app/` | Command line, GUI, batch mode, HTML report |
-| `losslesssync/sync/` | `pipeline` (the steps above), `features`, `speed` (speed, anchors, pitch mode), `segments` (fine offsets, drift), `gaps` (dropouts, muted spans), `cuts` (cut points) |
+| `losslesssync/sync/` | `pipeline` (the steps above), `features`, `speed` (speed, anchors, pitch mode), `segments` (fine offsets, drift), `gaps` (dropouts, muted spans), `cuts` (cut points), `respeed` (parts at another speed) |
 | `losslesssync/audio/` | ffmpeg decoding and encoding, WAV I/O, rendering |
 | `losslesssync/stretch/` | Pitch-keeping stretchers: WSOLA, PSOLA, separated stems and their helper (`ext`), the native kernels (`native`) |
 | `dsp/` | `lls-dsp`, the native WSOLA/PSOLA/HPSS/Signalsmith kernels |
@@ -225,9 +229,11 @@ window, and the tables.
 ## Testing
 
 `tools/make_synth.py` builds synthetic material with known ground truth. `tools/check.py`
-compares a result against it. The variants are `pal`, `tempo` and `none`, and `--dropouts`
-adds a series of lost and muted dropouts. `tools/run_synth.py` runs all six cases (each
-variant with and without dropouts) end to end and prints PASS/FAIL per case:
+compares a result against it. The variants are `pal`, `tempo` and `none`; `--dropouts` adds
+a series of lost and muted dropouts, and `--ad`, `--recap`, `--intro`, `--credits` and
+`--channels` add an ad break, a recap, a different intro, sped-up credits and other TV
+layouts. `tools/run_synth.py` runs all thirteen cases end to end and prints PASS/FAIL per
+case:
 
 ```
 python tools/run_synth.py [test_out] [--cases pal,drop_pal]
