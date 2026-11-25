@@ -39,75 +39,63 @@ pieces touch get a 4 ms splice guard.
 
 ## Requirements
 
-- Python 3.10 or newer
-- `numpy` and `scipy`
-- `ffmpeg` and `ffprobe` on `PATH` (with `librubberband` for the time-stretch mode)
-- Tkinter, for the GUI (included with the standard Python installers)
-- Optional, for speed: Rust, to build the native kernels (`cd dsp && cargo build --release`).
-  `losslesssync` finds `dsp/target/release/lls-dsp` by itself (or `$LOSSLESSSYNC_DSP`;
-  `LOSSLESSSYNC_DSP=off` forces the Python code). The WSOLA stretch is bit-identical and
-  about 6x faster (T05E01 `--pitch keep`: 80 s -> 59 s end to end).
-- Optional, for `--keep-engine stems`: a second Python (3.11 works) with
-  `audio-separator[gpu]`, `python-stretch` and `soundfile`, ideally with CUDA torch. A venv
-  keeps torch out of the main install. `scripts/setup.ps1` (Windows) or `scripts/setup.sh`
-  (Linux) creates it in `~/.lls/venv-sep` and sets `LOSSLESSSYNC_EXT_PYTHON`; by hand:
+Nothing to install by hand. `lls` (Linux) and `lls.cmd` (Windows) at the repo root
+download everything into `.lls/` inside the project, with pinned versions and checksums:
+uv, Python, the venv (`uv.lock`), a static ffmpeg with `librubberband`, rclone, the
+kaggle and modal CLIs and `lls-dsp` (the native kernels, prebuilt by CI for each version of
+`dsp/`). Nothing goes outside the folder, and no system variable or `PATH` is changed, so a
+copied or moved folder works after `lls setup`. Windows x64, Linux x64 and Linux arm64.
 
-  ```
-  py -3.11 -m venv %USERPROFILE%\.lls\venv-sep
-  %USERPROFILE%\.lls\venv-sep\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu126
-  %USERPROFILE%\.lls\venv-sep\Scripts\python -m pip install "audio-separator[gpu]" python-stretch soundfile
-  %USERPROFILE%\.lls\venv-sep\Scripts\python -m pip install "triton-windows<3.10"
-  ```
+- Optional, `lls setup --stems`: a second Python (3.11) with CUDA torch, `audio-separator`
+  and `python-stretch` in `.lls/<platform>/venv-sep`, plus the separation model in
+  `.lls/models` (3-5 GB). `--keep-engine auto` then uses it. Without an NVIDIA GPU the
+  separation runs on the CPU (much slower), or in the cloud through `gpu/run_gpu.py`.
 
-  Then pass `--ext-python %USERPROFILE%\.lls\venv-sep\Scripts\python.exe` (or set `LOSSLESSSYNC_EXT_PYTHON`).
+  With Triton (installed by `--stems`) the model's repeated blocks are compiled
+  (`torch.compile`): separation chunks run 2.15x faster on an RTX 4060 (2-episode batch
+  200 s -> 168-186 s), for ~15 s of compiling the first time and ~5 s after that (cached next
+  to the models).
 
-  With Triton installed the model's repeated blocks are compiled (`torch.compile`):
-  separation chunks run 2.15x faster on an RTX 4060 (2-episode batch 200 s -> 168-186 s),
-  for ~15 s of compiling the first time and ~5 s after that (cached next to the models).
-
-  The separation runs on CUDA (NVIDIA, or AMD with a ROCm torch build), else on an Intel
-  GPU with a torch XPU build, else on the CPU (much slower). With `torch-directml`
-  installed it would use DirectML, but audio-separator runs the RoFormer model on the CPU
-  there (DirectML runs out of memory on it), so DirectML gives no speed-up.
-
-  With `lls-dsp` built with `--features signalsmith`, the helper stretches the rest while
-  the GPU is still separating the vocals, instead of afterwards (T05E01: 151 s -> 115-139 s;
-  a 2-episode batch: 250 s -> 200 s, and it no longer holds the whole residual in memory).
-  That feature compiles Signalsmith Stretch (C++), so it needs a C++ compiler and libclang;
-  on Windows with the Rust GNU toolchain, a WinLibs GCC with LLVM works:
-
-  ```
-  set PATH=C:\path\to\mingw64\bin;%PATH%
-  set LIBCLANG_PATH=C:\path\to\mingw64\bin
-  cd dsp && cargo build --release --features signalsmith
-  ```
+  `lls-dsp` (built with the `signalsmith` feature) stretches the rest while the GPU is still
+  separating the vocals, instead of afterwards (T05E01: 151 s -> 115-139 s; a 2-episode
+  batch: 250 s -> 200 s, and it no longer holds the whole residual in memory).
+- Optional, `lls setup --dev`: Rust in `.lls/` to rebuild `lls-dsp` (`lls cargo build
+  --release --features signalsmith`). The `signalsmith` feature compiles C++, so it needs a
+  C++ compiler and libclang; on Windows, point `LLS_MINGW` to a WinLibs GCC with LLVM
+  (`...\mingw64\bin`). `LOSSLESSSYNC_DSP=off` forces the Python code (the WSOLA stretch is
+  bit-identical, about 6x slower).
 
 ## Installation
 
 ```
 git clone https://github.com/Trick230/LosslessSync.git
 cd LosslessSync
-pip install -e .
+./lls setup          # Windows: lls setup     (add --stems for the GPU stems engine)
+./lls check
 ```
+
+`./lls` with no `setup` sets up the basics on first use. Every command below runs as
+`./lls <command>` (`lls sync ...`, `lls batch ...`, `lls gui`, `lls test`,
+`lls py SCRIPT`); `./lls help` lists them. In the cloud, `./lls setup --cloud` skips torch.
 
 ## Usage
 
 ### List the audio tracks of a file
 
 ```
-losslesssync probe episode.mkv tv.ts
+lls probe episode.mkv tv.ts
 ```
 
 ### Sync
 
 ```
-losslesssync sync --ref episode.mkv --src tv.ts -o pt.flac --report pt.json
+lls sync --ref episode.mkv --src tv.ts -o pt.flac --report pt.json
 ```
 
 ### Sync and mux into a copy of the reference
 
 ```
-losslesssync sync --ref episode.mkv --src tv.ts -o pt.flac --mux episode_pt.mkv
+lls sync --ref episode.mkv --src tv.ts -o pt.flac --mux episode_pt.mkv
 ```
 
 ### Analyse only
@@ -115,13 +103,13 @@ losslesssync sync --ref episode.mkv --src tv.ts -o pt.flac --mux episode_pt.mkv
 Prints the edit list without rendering.
 
 ```
-losslesssync sync --ref episode.mkv --src tv.ts --analyze-only
+lls sync --ref episode.mkv --src tv.ts --analyze-only
 ```
 
 ### Batch: a whole season
 
 ```
-losslesssync batch --ref-dir season5 --out-dir synced -j 2
+lls batch --ref-dir season5 --out-dir synced -j 2
 ```
 
 Pairs reference and source files by episode code in the name (`S05E01`, `T05E01`,
@@ -139,10 +127,8 @@ one finishes on the CPU.
 ### Graphical interface
 
 ```
-losslesssync gui
+lls gui
 ```
-
-Or `python -m losslesssync gui`.
 
 ## Options
 
@@ -157,12 +143,12 @@ Or `python -m losslesssync gui`.
 | `--speed` | `auto` | `auto`, `pal`, `1`, or an exact ratio such as `1001/960` |
 | `--pitch` | `auto` | `auto`, `resample`, `tempo` or `keep` (cut on the resampled source, render it time-stretched so the original PAL pitch is kept on the film timing) |
 | `--keep-engine` | `auto` | stretcher for `--pitch keep` (`auto`: `stems` when `--ext-python` or `LOSSLESSSYNC_EXT_PYTHON` is set, else `wsola`): `wsola` (built in; no phase-vocoder smearing, timing error bounded by `--wsola-max-ms`) `rubberband` (R3), or `stems`: the vocals are separated (RoFormer, GPU) and stretched with WSOLA, the rest with Signalsmith Stretch, then summed; the two always add back to the source |
-| `--ext-python` | `$LOSSLESSSYNC_EXT_PYTHON`, else this Python | Python with `audio-separator` and `python-stretch`, for `stems` |
+| `--ext-python` | `$LOSSLESSSYNC_EXT_PYTHON`, else `.lls/<platform>/venv-sep`, else this Python | Python with `audio-separator` and `python-stretch`, for `stems` |
 | `--sep-model` | `vocals_mel_band_roformer.ckpt` | Vocals model for `stems` |
 | `--vocal-engine` | `wsola` | `stems`: stretcher for the vocals, `wsola` or `psola` (`lls-dsp psola`: repeats or drops whole pitch periods; lower latency, but a worse p95 sync error on the test episode) |
 | `--hpss` | off | `stems`: split the rest into tonal parts (Signalsmith) and attacks (short-frame WSOLA, keeps them sharp); needs `lls-dsp` built with `signalsmith`. With `--vocal-engine psola`: p95 1.20 vs 1.30 ms, but a 2-episode batch takes ~10 s longer |
 | `--rest-block-ms`, `--rest-interval-ms` | `120`, `30` | `stems`: Signalsmith block and hop for the rest |
-| `--sep-model-dir` | `~/.cache/losslesssync/models` | Where separation models are stored (downloaded on first use) |
+| `--sep-model-dir` | `.lls/models` | Where separation models are stored (downloaded on first use) |
 | `--wsola-tol-ms` | `5` | WSOLA search tolerance: events stay within this of their exact place |
 | `--wsola-max-ms` | `10` | WSOLA widens its search up to this only for a clearly better splice (fewer artefacts; set it equal to `--wsola-tol-ms` for a hard bound) |
 | `--no-match-loudness` | off | Keep the source's level. By default one constant gain gives the synced track the reference's integrated loudness (EBU R128, measured over the synced parts only); no compression or limiting, and capped so the peaks stay below -0.1 dBFS (-1 dBFS for lossy codecs) |
@@ -239,15 +225,15 @@ layouts. `tools/run_synth.py` runs all thirteen cases end to end and prints PASS
 case:
 
 ```
-python tools/run_synth.py [test_out] [--cases pal,drop_pal]
+lls py tools/run_synth.py [test_out] [--cases pal,drop_pal]
 ```
 
 One case by hand:
 
 ```
-python tools/make_synth.py test_out/pal --variant pal
-losslesssync sync --ref test_out/pal/ref.mka --src test_out/pal/tv.ts -o test_out/pal/out.flac --report test_out/pal/report.json
-python tools/check.py test_out/pal
+lls py tools/make_synth.py test_out/pal --variant pal
+lls sync --ref test_out/pal/ref.mka --src test_out/pal/tv.ts -o test_out/pal/out.flac --report test_out/pal/report.json
+lls py tools/check.py test_out/pal
 ```
 
 `tools/stretch_quality.py SOURCE [engine ...]` scores the artefacts of the pitch-keeping
@@ -258,8 +244,7 @@ original on a log-mel spectrogram, forgiving +-10 ms of displacement. Lower is b
 ## Development
 
 The project runs in three places: Windows, Linux (CachyOS) and a GPU-less cloud VM.
-`scripts/setup.ps1` / `scripts/setup.sh` set each one up (`-Check` / `--check` shows the
-state). `gpu/run_gpu.py` sends stem separation to a free cloud GPU, and
+`lls setup` sets each one up (`lls check` shows the state). `gpu/run_gpu.py` sends stem separation to a free cloud GPU, and
 `tools/media_sync.py` syncs a whole folder, or a Google Drive folder through rclone.
 CI runs the synthetic cases on every push. Workflow, rules and commands are in
 [CLAUDE.md](CLAUDE.md) (Portuguese).
