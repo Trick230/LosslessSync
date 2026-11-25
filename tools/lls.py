@@ -477,6 +477,7 @@ def main(argv: list[str]) -> int:
         if cmd == "setup":
             return setup(rest)
         if cmd == "check":
+            relocate()
             return check()
         if cmd == "dsp-hash":
             print(dsp_hash())
