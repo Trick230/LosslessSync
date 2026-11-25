@@ -48,16 +48,17 @@ pieces touch get a 4 ms splice guard.
   about 6x faster (T05E01 `--pitch keep`: 80 s -> 59 s end to end).
 - Optional, for `--keep-engine stems`: a second Python (3.11 works) with
   `audio-separator[gpu]`, `python-stretch` and `soundfile`, ideally with CUDA torch. A venv
-  keeps torch out of the main install:
+  keeps torch out of the main install. `scripts/setup.ps1` (Windows) or `scripts/setup.sh`
+  (Linux) creates it in `~/.lls/venv-sep` and sets `LOSSLESSSYNC_EXT_PYTHON`; by hand:
 
   ```
-  py -3.11 -m venv .venv-sep
-  .venv-sep\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu126
-  .venv-sep\Scripts\pip install "audio-separator[gpu]" python-stretch soundfile
-  .venv-sep\Scripts\pip install "triton-windows<3.10"
+  py -3.11 -m venv %USERPROFILE%\.lls\venv-sep
+  %USERPROFILE%\.lls\venv-sep\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu126
+  %USERPROFILE%\.lls\venv-sep\Scripts\python -m pip install "audio-separator[gpu]" python-stretch soundfile
+  %USERPROFILE%\.lls\venv-sep\Scripts\python -m pip install "triton-windows<3.10"
   ```
 
-  Then pass `--ext-python .venv-sep\Scripts\python.exe` (or set `LOSSLESSSYNC_EXT_PYTHON`).
+  Then pass `--ext-python %USERPROFILE%\.lls\venv-sep\Scripts\python.exe` (or set `LOSSLESSSYNC_EXT_PYTHON`).
 
   With Triton installed the model's repeated blocks are compiled (`torch.compile`):
   separation chunks run 2.15x faster on an RTX 4060 (2-episode batch 200 s -> 168-186 s),
