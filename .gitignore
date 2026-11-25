@@ -14,3 +14,4 @@ __pycache__/
 /synced/
 /gpu_out/
 .env
+/.lls/

@@ -1,8 +1,8 @@
 """Locates the optional native kernels (dsp/, written in Rust, binary lls-dsp).
 
-Looked up in $LOSSLESSSYNC_DSP, then the newest build (release or dev-fast profile) in
-dsp/target next to the package or in the shared $CARGO_TARGET_DIR (default ~/.lls/cargo-target),
-then PATH.
+Looked up in $LOSSLESSSYNC_DSP, then the newest of: the prebuilt binary `lls setup` put in
+.lls/<platform>/bin, a local build (release or dev-fast profile) in .lls/<platform>/cargo-target
+(`lls cargo build`) or dsp/target; then PATH.
 Set LOSSLESSSYNC_DSP=off to force the pure-Python code.
 """
 from __future__ import annotations
@@ -12,6 +12,8 @@ import shutil
 import subprocess
 from functools import lru_cache
 
+from .. import BIN, LOCAL, ROOT
+
 _EXE = "lls-dsp.exe" if os.name == "nt" else "lls-dsp"
 
 
@@ -20,12 +22,12 @@ def dsp() -> str | None:
     env = os.environ.get("LOSSLESSSYNC_DSP", "")
     if env.lower() in ("off", "0", "no"):
         return None
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     if env and os.path.isfile(env):
         return env
-    shared = os.environ.get("CARGO_TARGET_DIR") or os.path.join(os.path.expanduser("~"), ".lls", "cargo-target")
-    builds = [os.path.join(t, prof, _EXE) for t in (os.path.join(root, "dsp", "target"), shared)
-              for prof in ("release", "dev-fast")]
+    builds = [os.path.join(BIN, _EXE)] + [
+        os.path.join(t, prof, _EXE) for t in (os.path.join(LOCAL, "cargo-target"),
+                                             os.path.join(ROOT, "dsp", "target"))
+        for prof in ("release", "dev-fast")]
     builds = [b for b in builds if os.path.isfile(b)]
     if builds:
         return max(builds, key=os.path.getmtime)

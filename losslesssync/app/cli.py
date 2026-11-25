@@ -5,6 +5,7 @@ import argparse
 import os
 import sys
 
+from .. import MODELS, venv_python
 from ..audio import media
 from ..sync.pipeline import Options, sync
 
@@ -19,6 +20,8 @@ def cmd_probe(args):
 def make_options(args, **extra) -> Options:
     # stems by default once a helper Python is configured (flag or environment)
     ext = args.ext_python or os.environ.get("LOSSLESSSYNC_EXT_PYTHON", "")
+    if not ext and os.path.isfile(venv_python("venv-sep")):   # lls setup --stems
+        ext = venv_python("venv-sep")
     engine = args.keep_engine if args.keep_engine != "auto" else ("stems" if ext else "wsola")
     return Options(
         ref_track=args.ref_track, src_track=args.src_track,
@@ -67,14 +70,14 @@ def add_common(s):
                         "timing error bounded by --wsola-tol-ms), rubberband (R3), or stems "
                         "(vocals separated and stretched with WSOLA, the rest with Signalsmith "
                         "Stretch; needs the helper Python). auto (default): stems when "
-                        "--ext-python or $LOSSLESSSYNC_EXT_PYTHON is set, else wsola")
+                        "a helper Python is set or set up (lls setup --stems), else wsola")
     s.add_argument("--ext-python",
                    help="Python with audio-separator and python-stretch, for --keep-engine "
-                        "stems (default $LOSSLESSSYNC_EXT_PYTHON, else this Python)")
+                        "stems (default $LOSSLESSSYNC_EXT_PYTHON, else .lls/<platform>/venv-sep, else "
+                        "this Python)")
     s.add_argument("--sep-model", default="vocals_mel_band_roformer.ckpt",
                    help="audio-separator vocals model for --keep-engine stems")
-    s.add_argument("--sep-model-dir", default=os.path.join(os.path.expanduser("~"), ".cache",
-                                                           "losslesssync", "models"),
+    s.add_argument("--sep-model-dir", default=MODELS,
                    help="where separation models are kept (downloaded on first use)")
     s.add_argument("--vocal-engine", choices=("psola", "wsola"), default="wsola",
                    help="stems: stretcher for the vocals; wsola splices 24 ms frames "

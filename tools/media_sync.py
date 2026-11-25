@@ -8,7 +8,7 @@ done are skipped.
 
 Cloud (--cloud or LLS_ENV=cloud): the rclone remote gdrive: (limited by root_folder_id to
 the Drive folder LosslessSync) with refs/, srcs/ and synced/. One episode at a time: copy
-its two files to ~/.lls/media-cache, sync, upload the flac/json/html/log to
+its two files to .lls/media-cache, sync, upload the flac/json/html/log to
 gdrive:synced/<episode>/, delete that episode's cache. Episodes with their report in
 synced/<episode>/ are skipped. The remote comes from RCLONE_CONFIG_GDRIVE_* (see .env.example).
 
@@ -26,6 +26,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "gpu"))
 from run_gpu import load_env  # noqa: E402  (.env loader, standard library only)
 
+from losslesssync import LLS  # noqa: E402
 from losslesssync.app.batch import MEDIA_EXT, episode_key  # noqa: E402
 
 REMOTE = "gdrive:"
@@ -64,10 +65,10 @@ def media_files(folder: str) -> dict[str, str]:
 
 def cloud(extra: list[str], dry: bool) -> int:
     if not shutil.which("rclone"):
-        sys.exit("rclone missing (scripts/setup.sh --env cloud installs it)")
+        sys.exit("rclone missing (lls setup installs it)")
     refs, srcs = media_files("refs"), media_files("srcs")
     done = {d.rstrip("/") for d in rclone("lsf", "--dirs-only", REMOTE + "synced", capture=True).splitlines()}
-    cache_root = os.path.join(os.path.expanduser("~"), ".lls", "media-cache")
+    cache_root = os.path.join(LLS, "media-cache")
     failed = 0
     for key in sorted(set(refs) & set(srcs)):
         ref, src = refs[key], srcs[key]

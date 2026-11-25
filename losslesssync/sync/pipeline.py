@@ -14,6 +14,7 @@ from fractions import Fraction
 import numpy as np
 from scipy import fft as sp_fft
 
+from .. import MODELS
 from ..app import report_html
 from ..audio import media, wavio
 from ..audio.render import render
@@ -41,7 +42,7 @@ class Options:
     hpss: bool = False           # stems: split the rest into tonal (Signalsmith) and attacks (WSOLA)
     rest_block_ms: float = 0.0   # stems: Signalsmith block and interval (0: its default 120/30)
     rest_interval_ms: float = 0.0
-    sep_model_dir: str = os.path.join(os.path.expanduser("~"), ".cache", "losslesssync", "models")   # ...widened up to this for a clearly better splice
+    sep_model_dir: str = MODELS   # ...widened up to this for a clearly better splice
     fill: str = "silence"        # silence | ref
     fade_ms: float = 300.0        # fade at edges next to a gap
     fade_opening: bool = False   # also fade into the opening titles

@@ -46,18 +46,15 @@ def load_env() -> None:
 
 
 def tool(name: str) -> str | None:
-    """A CLI on PATH, next to this Python, or in the shared venv."""
-    found = shutil.which(name)
-    if found:
-        return found
-    sub = "Scripts" if os.name == "nt" else "bin"
+    """A CLI in .lls/<platform>/bin (lls setup), next to this Python, or on PATH."""
+    sys.path.insert(0, ROOT)
+    from losslesssync import BIN      # the package's __init__ needs only the standard library
     exe = name + (".exe" if os.name == "nt" else "")
-    for d in (os.path.dirname(sys.executable),
-              os.path.join(os.path.expanduser("~"), ".lls", "venv", sub)):
+    for d in (BIN, os.path.dirname(sys.executable)):
         p = os.path.join(d, exe)
         if os.path.isfile(p):
             return p
-    return None
+    return shutil.which(name)
 
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:

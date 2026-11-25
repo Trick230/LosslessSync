@@ -11,7 +11,8 @@
     ... separate --vocals FILE IN ...               the same with a vocals stem computed
                                                     elsewhere (no torch needed)
 
-One separation uses the local GPU at a time (~/.lls/gpu.lock, across worktrees). With
+One separation uses the local GPU at a time (lls-gpu.lock in the system temp folder,
+across worktrees). With
 LLS_ENV=cloud, or with LLS_GPU_FALLBACK=cloud while the lock is held, the vocals come from a
 cloud GPU through gpu/run_gpu.py (same model and settings).
 
@@ -108,11 +109,12 @@ def _stretcher(dst: str, channels: int, sr: int):
 
 
 def _gpu_lock(block: bool):
-    """Takes ~/.lls/gpu.lock (released when the file closes or the process ends). Returns
-    the open file, or None when another process holds it and block is False."""
+    """Takes lls-gpu.lock in the temp folder, one per machine (released when the file closes
+    or the process ends). Returns the open file, or None when another process holds it and
+    block is False."""
+    import tempfile
     import time
-    path = os.path.join(os.path.expanduser("~"), ".lls", "gpu.lock")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    path = os.path.join(tempfile.gettempdir(), "lls-gpu.lock")
     f = open(path, "a+b")
     told = False
     while True:
