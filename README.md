@@ -17,6 +17,7 @@ losslessly (FLAC 24-bit) by default.
 - [How it works](#how-it-works)
 - [Output and report](#output-and-report)
 - [Testing](#testing)
+- [Development](#development)
 - [Limitations](#limitations)
 
 ## What it handles
@@ -253,6 +254,15 @@ python tools/check.py test_out/pal
 stretchers (`wsola[:tol[:frame_ms[:key=value...]]]`, `rubberband`, `signalsmith`, `atempo`): four
 excerpts are stretched and stretched back, and the round trip is compared with the
 original on a log-mel spectrogram, forgiving +-10 ms of displacement. Lower is better.
+
+## Development
+
+The project runs in three places: Windows, Linux (CachyOS) and a GPU-less cloud VM.
+`scripts/setup.ps1` / `scripts/setup.sh` set each one up (`-Check` / `--check` shows the
+state). `gpu/run_gpu.py` sends stem separation to a free cloud GPU, and
+`tools/media_sync.py` syncs a whole folder, or a Google Drive folder through rclone.
+CI runs the synthetic cases on every push. Workflow, rules and commands are in
+[CLAUDE.md](CLAUDE.md) (Portuguese).
 
 ## Limitations
 
