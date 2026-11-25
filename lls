@@ -1,5 +1,5 @@
 #!/bin/sh
-# LosslessSync launcher (Linux): fetches uv into .lls/<platform>/bin, then runs scripts/lls.py
+# LosslessSync launcher (Linux): fetches uv into .lls/<platform>/bin, then runs tools/lls.py
 # on a uv-managed Python. Nothing is installed outside this folder. `./lls help` for commands.
 set -e
 ROOT=$(cd "$(dirname "$0")" && pwd)
@@ -23,4 +23,4 @@ if [ ! -x "$L/bin/uv" ]; then
 fi
 export UV_CACHE_DIR="$L/cache/uv" UV_PYTHON_INSTALL_DIR="$L/python" \
   UV_PYTHON_PREFERENCE=only-managed UV_PYTHON_INSTALL_BIN=0
-exec "$L/bin/uv" run -q --no-project --python 3.14 "$ROOT/scripts/lls.py" "$@"
+exec "$L/bin/uv" run -q --no-project --python 3.14 "$ROOT/tools/lls.py" "$@"

@@ -56,13 +56,25 @@ FFMPEG = {   # static GPL builds (with librubberband); the dated build is pinned
     "linux-arm64": (f"{FF}/autobuild-2026-11-25-12-41/ffmpeg-n8.1.3-41-ga8029b6528-linuxarm64-gpl-8.1.tar.xz",
                     "8d99132e74494ac29423ee850afdd9b3de2de92428926a6e282bc1b3a4abb8bc",
                     f"{FF}/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz"),
+    "windows-arm64": (f"{FF}/autobuild-2026-11-25-12-41/ffmpeg-n8.1.3-41-ga8029b6528-winarm64-gpl-8.1.zip",
+                      "878b5ab7c7bdf33c98ceed9bb526eef60588c5de8eff224edc6a40306cf96c4f",
+                      f"{FF}/latest/ffmpeg-n8.1-latest-winarm64-gpl-8.1.zip"),
 }
+# macOS is not supported: no static ffmpeg with librubberband for Apple Silicon exists
 RC = f"{GH}/rclone/rclone/releases/download/v1.76.0/rclone-v1.76.0"
 RCLONE = {
     "windows-x64": (f"{RC}-windows-amd64.zip", "8b4fd2737ade4e70c057ef4a49deb7cffe94b0fb9d7587c189d149823f21a1dc"),
     "linux-x64": (f"{RC}-linux-amd64.zip", "b00f00b3266c3764413afe599d3ec316f6f43b3e0ea8a0bc1d186d2133e46df7"),
     "linux-arm64": (f"{RC}-linux-arm64.zip", "ee169016675e23a69d77240565133ff7dbc9b33d16fa8f7053d4af39f1eaeb78"),
+    "windows-arm64": (f"{RC}-windows-arm64.zip", "c406c8a69a5a408e50624aa990fbb0a6266b3a4e83782a94de3cb96f50f86f10"),
 }
+# GCC + libclang for the signalsmith feature of lls-dsp on Windows (setup --dev; LLS_MINGW
+# overrides it)
+WINLIBS = ("https://github.com/brechtsanders/winlibs_mingw/releases/download/16.2.0posix-23.1.3-14.0.0-ucrt-r3/"
+           "winlibs-x86_64-posix-seh-gcc-16.2.0-llvm-23.1.3-mingw-w64ucrt-14.0.0-r3.zip",
+           "1f04e482797dc5f71fe2875cf2b743bfb9f5fd1de0955fdd3118438c0432ba5f")
+RUST_HOST = {"windows-x64": "x86_64-pc-windows-gnu", "windows-arm64": "aarch64-pc-windows-msvc",
+             "linux-x64": "x86_64-unknown-linux-gnu", "linux-arm64": "aarch64-unknown-linux-gnu"}
 CLOUD_TOOLS = ["kaggle==2.2.5", "modal==1.6.4"]
 STEMS_TORCH = ("torch==2.14.1", "https://download.pytorch.org/whl/cu126")
 STEMS = ["audio-separator[gpu]==0.48.0", "python-stretch==0.3.1", "soundfile==0.14.0",
@@ -255,9 +267,10 @@ def rust_env() -> dict:
     env.update(RUSTUP_HOME=os.path.join(rust, "rustup"), CARGO_HOME=os.path.join(rust, "cargo"),
                CARGO_TARGET_DIR=os.path.join(LOCAL, "cargo-target"))
     path = [os.path.join(rust, "cargo", "bin")]
-    if os.environ.get("LLS_MINGW"):          # Windows: a GCC + libclang for the signalsmith feature
-        path.append(os.environ["LLS_MINGW"])
-        env.setdefault("LIBCLANG_PATH", os.environ["LLS_MINGW"])
+    mingw = os.environ.get("LLS_MINGW") or os.path.join(LOCAL, "mingw64", "bin")
+    if WIN and os.path.isdir(mingw):         # a GCC + libclang for the signalsmith feature
+        path.append(mingw)
+        env.setdefault("LIBCLANG_PATH", mingw)
     env["PATH"] = os.pathsep.join(path + [env.get("PATH", "")])
     return env
 
@@ -267,11 +280,20 @@ def cargo() -> str | None:
     return local if os.path.isfile(local) else shutil.which("cargo")
 
 
+def setup_mingw() -> None:
+    if PLAT != "windows-x64" or os.environ.get("LLS_MINGW") or \
+            os.path.isfile(os.path.join(LOCAL, "mingw64", "bin", "gcc.exe")):
+        return
+    url, sha = WINLIBS
+    with zipfile.ZipFile(io.BytesIO(fetch(url, sha))) as z:   # one top folder: mingw64/
+        z.extractall(LOCAL)
+
+
 def setup_rust() -> None:
+    setup_mingw()
     if os.path.isfile(os.path.join(LOCAL, "rust", "cargo", "bin", "cargo" + EXE)):
         return
-    triple = {"windows-x64": "x86_64-pc-windows-gnu", "linux-x64": "x86_64-unknown-linux-gnu",
-              "linux-arm64": "aarch64-unknown-linux-gnu"}[PLAT]
+    triple = RUST_HOST[PLAT]
     url = f"https://static.rust-lang.org/rustup/dist/{triple}/rustup-init{EXE}"
     sha = fetch(url + ".sha256").decode().split()[0]
     init = os.path.join(LOCAL, "cache", "rustup-init" + EXE)
@@ -279,7 +301,7 @@ def setup_rust() -> None:
     with open(init, "wb") as f:
         f.write(fetch(url, sha))
     os.chmod(init, 0o755)
-    # the GNU host on Windows links with its own bundled MinGW: no Visual Studio needed
+    # the GNU host on Windows x64 links with MinGW: no Visual Studio needed (ARM64 needs it)
     args = ["-y", "--no-modify-path", "--profile", "minimal", "--default-host", triple]
     if subprocess.call([init, *args], env=rust_env()):
         raise Fail("rustup-init failed")
@@ -330,7 +352,38 @@ def setup_cloud_tools(required: bool) -> None:
             say("WARNING: " + msg)
 
 
+def relocate() -> None:
+    """A copied or moved folder: the venvs and the kaggle/modal shims hold absolute paths, so
+    they are rebuilt (from the cache in .lls, no download)."""
+    stamp = os.path.join(LOCAL, "root")
+    try:
+        with open(stamp) as f:
+            old = f.read().strip()
+    except OSError:
+        old = None
+    if old == LOCAL:
+        return
+    sep = os.path.isdir(os.path.join(LOCAL, "venv-sep"))
+    if old is not None:
+        say(f"folder moved ({old} -> {LOCAL}): rebuilding the venvs")
+        for d in ("venv", "venv-sep", "tools"):
+            shutil.rmtree(os.path.join(LOCAL, d), ignore_errors=True)
+        for t in ("kaggle", "modal"):
+            if os.path.isfile(os.path.join(BIN, t + EXE)):
+                os.remove(os.path.join(BIN, t + EXE))
+    os.makedirs(LOCAL, exist_ok=True)
+    with open(stamp, "w") as f:
+        f.write(LOCAL)
+    if old is not None:
+        setup_venv()
+        setup_cloud_tools(False)
+        if sep:
+            setup_stems(mode() == "cloud")
+
+
 def setup_stems(cloud: bool) -> None:
+    if PLAT == "windows-arm64" and not cloud:
+        raise Fail("no CUDA torch for Windows ARM: separation goes to the cloud (lls setup --cloud)")
     sep, spy = os.path.join(LOCAL, "venv-sep"), venv_python("venv-sep")
     if not os.path.isfile(spy):
         uv("venv", "-q", "--python", SEP_PY, sep)
@@ -353,6 +406,7 @@ def setup(args: list[str]) -> int:
             f.write("cloud" if "--cloud" in args else "pc")
     cloud = mode() == "cloud"
     say(f"setting up {LOCAL} ({'cloud' if cloud else 'pc'})")
+    relocate()
     steps = [("python + venv", setup_venv), ("ffmpeg", setup_ffmpeg), ("rclone", setup_rclone),
              ("kaggle + modal", lambda: setup_cloud_tools(cloud))]
     if "--dev" in args:
@@ -400,6 +454,7 @@ def check() -> int:
 # ---------------------------------------------------------------- run
 
 def ensure() -> None:
+    relocate()
     if not venv_fresh():
         say("python + venv")
         setup_venv()
@@ -436,10 +491,9 @@ def main(argv: list[str]) -> int:
             return subprocess.call([exe, *rest], cwd=os.path.join(ROOT, "dsp"), env=rust_env())
         if cmd == "py":
             return python(rest)
-        if cmd == "test":
-            cases = rest[0] if rest else "pal,tempo,drop_pal"
-            return python([os.path.join(ROOT, "tools", "run_synth.py"), os.path.join(ROOT, "test_out")]
-                          + ([] if cases == "all" else ["--cases", cases]))
+        if cmd == "test":                    # tests/: LLS_CASES picks the synthetic cases
+            os.environ["LLS_CASES"] = rest[0] if rest else os.environ.get("LLS_CASES", "")
+            return python(["-m", "unittest", "discover", "-v", "-s", os.path.join(ROOT, "tests")])
         if cmd == "gui":
             return python(["-c", "from losslesssync.app.gui import main; main()"])
         return python(["-m", "losslesssync", cmd, *rest])
