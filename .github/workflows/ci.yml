@@ -1,0 +1,66 @@
+name: ci
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          bash scripts/setup.sh --env pc --no-stems --no-rust
+          echo "PY=$HOME/.lls/venv/bin/python" >> "$GITHUB_ENV"
+
+      - name: setup (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ffmpeg-full -y --no-progress
+          ./scripts/setup.ps1 -Env pc -NoStems -NoRust
+          "PY=$env:USERPROFILE\.lls\venv\Scripts\python.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: ffmpeg has rubberband
+        shell: bash
+        run: ffmpeg -hide_banner -filters | grep rubberband
+
+      - name: build lls-dsp (dev-fast)
+        shell: bash
+        working-directory: dsp
+        run: cargo build --profile dev-fast
+
+      - name: setup --check
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then pwsh -File scripts/setup.ps1 -Check; else bash scripts/setup.sh --check; fi
+
+      - name: quick cases
+        shell: bash
+        run: '"$PY" tools/run_synth.py test_out --cases pal,tempo,drop_pal'
+
+      - name: all cases
+        if: runner.os == 'Linux'
+        shell: bash
+        run: '"$PY" tools/run_synth.py test_out_all'
+
+      - name: reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-${{ matrix.os }}
+          path: |
+            test_out*/**/*.json
+            test_out*/**/*.html
+            test_out*/**/*.log
+            test_out*/**/*.txt
+          if-no-files-found: ignore
