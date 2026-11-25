@@ -3,6 +3,8 @@ rem LosslessSync launcher (Windows): fetches uv into .lls\windows-x64\bin, then 
 rem scripts\lls.py on a uv-managed Python. Nothing is installed outside this folder.
 rem `lls help` for the commands.
 setlocal
+rem a PowerShell 7 parent leaks its module path into Windows PowerShell 5.1
+set "PSModulePath="
 set "L=%~dp0.lls\windows-x64"
 if not exist "%L%\bin\uv.exe" (
   echo lls: downloading uv 0.13.10 1>&2

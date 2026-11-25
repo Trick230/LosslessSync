@@ -29,11 +29,12 @@ jobs:
         run: |
           $tag = "dsp-$(${{ matrix.lls }} dsp-hash)"
           $asset = "$(${{ matrix.lls }} dsp-asset)"
+          if ($tag -notmatch '^dsp-[0-9a-f]{12}$' -or -not $asset) { throw "lls dsp-hash failed" }
           $names = gh release view $tag -R $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name' 2>$null
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "asset=$asset" >> $env:GITHUB_OUTPUT
           "build=$(-not ($names -contains $asset))" >> $env:GITHUB_OUTPUT
-          exit 0
+          exit 0   # no release yet: gh's exit code is not a failure
       - name: libclang (Linux)
         if: steps.id.outputs.build == 'True' && runner.os == 'Linux'
         run: sudo apt-get install -y -q libclang-dev
