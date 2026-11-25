@@ -6,61 +6,115 @@ on:
   workflow_dispatch:
 
 jobs:
+  # lls-dsp for each platform, published as the release dsp-<hash of dsp/> that `lls setup`
+  # downloads; a platform whose asset is already there is not rebuilt
+  dsp:
+    strategy:
+      matrix:
+        include:
+          - {os: ubuntu-latest, lls: ./lls}
+          - {os: ubuntu-24.04-arm, lls: ./lls}
+          - {os: windows-latest, lls: ./lls.cmd}
+    runs-on: ${{ matrix.os }}
+    outputs:
+      tag: ${{ steps.id.outputs.tag }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+      - id: id
+        run: |
+          $tag = "dsp-$(${{ matrix.lls }} dsp-hash)"
+          $asset = "$(${{ matrix.lls }} dsp-asset)"
+          $names = gh release view $tag -R $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name' 2>$null
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "asset=$asset" >> $env:GITHUB_OUTPUT
+          "build=$(-not ($names -contains $asset))" >> $env:GITHUB_OUTPUT
+          exit 0
+      - name: libclang (Linux)
+        if: steps.id.outputs.build == 'True' && runner.os == 'Linux'
+        run: sudo apt-get install -y -q libclang-dev
+      - name: build
+        if: steps.id.outputs.build == 'True'
+        working-directory: dsp
+        run: |
+          if ($IsWindows) {   # static CRT: no Visual C++ redistributable needed
+            $env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
+            $env:RUSTFLAGS = "-C target-feature=+crt-static"
+          }
+          cargo build -q --release --features signalsmith
+          if ($LASTEXITCODE) { exit 1 }
+          $exe = if ($IsWindows) { "lls-dsp.exe" } else { "lls-dsp" }
+          New-Item -ItemType Directory -Force ../dist | Out-Null
+          Copy-Item "target/release/$exe" "../dist/${{ steps.id.outputs.asset }}"
+      - if: steps.id.outputs.build == 'True'
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.id.outputs.asset }}
+          path: dist/
+
+  release:
+    needs: dsp
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.dsp.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - run: |
+          ls dist 2>/dev/null | grep -q . || { echo "nothing new"; exit 0; }
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+              --title "lls-dsp $TAG" --notes "Prebuilt lls-dsp for the dsp/ sources with hash ${TAG#dsp-} (lls setup downloads it)."
+          gh release upload "$TAG" dist/* -R "$GITHUB_REPOSITORY" --clobber
+
+  # on pull requests there is no release: setup falls back to building lls-dsp with cargo
   test:
+    needs: [dsp, release]
+    if: always() && needs.dsp.result == 'success'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - {os: ubuntu-latest, lls: ./lls, all: true}
+          - {os: ubuntu-24.04-arm, lls: ./lls}
+          - {os: windows-latest, lls: ./lls.cmd}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v5
-
-      - name: setup (Linux)
-        if: runner.os == 'Linux'
+      - name: setup
+        run: ${{ matrix.lls }} setup
+      - name: lls-dsp present
         run: |
-          bash scripts/setup.sh --env pc --no-stems --no-rust
-          echo "PY=$HOME/.lls/venv/bin/python" >> "$GITHUB_ENV"
-
-      - name: setup (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          choco install ffmpeg-full -y --no-progress
-          ./scripts/setup.ps1 -Env pc -NoStems -NoRust
-          "PY=$env:USERPROFILE\.lls\venv\Scripts\python.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-
-      - name: ffmpeg has rubberband
-        shell: bash
-        run: ffmpeg -hide_banner -filters | grep rubberband
-
-      - name: build lls-dsp (dev-fast)
-        shell: bash
-        working-directory: dsp
-        run: cargo build --profile dev-fast
-
-      - name: setup --check
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = Windows ]; then pwsh -File scripts/setup.ps1 -Check; else bash scripts/setup.sh --check; fi
-
+          $out = ${{ matrix.lls }} check
+          $out
+          if (-not ($out | Select-String "lls-dsp\s+: .*lls-dsp")) { throw "no lls-dsp" }
       - name: quick cases
-        shell: bash
-        run: '"$PY" tools/run_synth.py test_out --cases pal,tempo,drop_pal'
-
+        run: ${{ matrix.lls }} test
       - name: all cases
-        if: runner.os == 'Linux'
-        shell: bash
-        run: '"$PY" tools/run_synth.py test_out_all'
-
+        if: matrix.all
+        run: ${{ matrix.lls }} test all
       - name: reports
         if: failure()
         uses: actions/upload-artifact@v5
         with:
           name: reports-${{ matrix.os }}
           path: |
-            test_out*/**/*.json
-            test_out*/**/*.html
-            test_out*/**/*.log
-            test_out*/**/*.txt
+            test_out/**/*.json
+            test_out/**/*.html
+            test_out/**/*.log
+            test_out/**/*.txt
           if-no-files-found: ignore
