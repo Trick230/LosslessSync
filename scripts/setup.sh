@@ -74,7 +74,14 @@ echo "== venv $VENV"
 [ -x "$VENV/bin/python" ] || "$(pyfind python3.13 python3.12 python3.11 python3)" -m venv "$VENV"
 "$VENV/bin/python" -m pip install -q --upgrade pip
 "$VENV/bin/python" -m pip install -q -e "$REPO"
-[ "$ENV" = cloud ] && "$VENV/bin/python" -m pip install -q kaggle modal
+# cloud GPU CLIs (gpu/run_gpu.py); in the cloud the venv is also the torch-free stems helper
+if [ "$ENV" = cloud ]; then "$VENV/bin/python" -m pip install -q kaggle modal
+else "$VENV/bin/python" -m pip install -q kaggle modal || echo "WARNING: kaggle/modal CLIs not installed (no cloud fallback)"; fi
+if [ "$ENV" = cloud ]; then
+  "$VENV/bin/python" -m pip install -q python-stretch soundfile soxr
+  persist LLS_ENV cloud
+  persist LOSSLESSSYNC_EXT_PYTHON "$VENV/bin/python"
+fi
 persist PATH "$VENV/bin:\$PATH"
 
 if [ "$RUST" = 1 ]; then

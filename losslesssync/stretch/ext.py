@@ -8,6 +8,12 @@
                                                     Signalsmith into REST_K, streamed
                                                     through lls-dsp when it is built (with
                                                     its stretch options, e.g. --perc)
+    ... separate --vocals FILE IN ...               the same with a vocals stem computed
+                                                    elsewhere (no torch needed)
+
+One separation uses the local GPU at a time (~/.lls/gpu.lock, across worktrees). With
+LLS_ENV=cloud, or with LLS_GPU_FALLBACK=cloud while the lock is held, the vocals come from a
+cloud GPU through gpu/run_gpu.py (same model and settings).
 
 Only numpy and soundfile from the main package's dependencies are needed here, so the
 helper Python can be a venv with torch (see README). Outputs are float WAV.
@@ -101,13 +107,93 @@ def _stretcher(dst: str, channels: int, sr: int):
     return start, framed
 
 
-def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str, *opts):
+def _gpu_lock(block: bool):
+    """Takes ~/.lls/gpu.lock (released when the file closes or the process ends). Returns
+    the open file, or None when another process holds it and block is False."""
+    import time
+    path = os.path.join(os.path.expanduser("~"), ".lls", "gpu.lock")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    f = open(path, "a+b")
+    told = False
+    while True:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return f
+        except OSError:
+            if not block:
+                f.close()
+                return None
+            if not told:
+                print(f"waiting for the GPU ({path} is held)", file=sys.stderr, flush=True)
+                told = True
+            time.sleep(1)
+
+
+def _gpu_unlock(f):
+    if f is None:
+        return
+    if os.name == "nt":
+        import msvcrt
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(f, fcntl.LOCK_UN)     # a forked child may still hold the descriptor
+    f.close()
+
+
+def write24(path: str, x, sr: int) -> None:
+    """24-bit FLAC for the cloud transfers; overs (a float source past 0 dBFS) are scaled
+    down rather than clipped, the gain kept in the file's comment (read back by gain24)."""
+    import numpy as np
+    import soundfile as sf
+    peak = float(np.abs(x).max()) if x.size else 0.0
+    g = peak if peak > 1.0 else 1.0
+    with sf.SoundFile(path, "w", sr, x.shape[1], subtype="PCM_24", format="FLAC") as f:
+        f.comment = f"lls_gain={g!r}"
+        f.write(x / g if g != 1.0 else x)
+
+
+def gain24(path: str) -> float:
+    import soundfile as sf
+    with sf.SoundFile(path) as f:
+        c = f.comment or ""
+    return float(c.split("=", 1)[1]) if c.startswith("lls_gain=") else 1.0
+
+
+def _cloud_vocals(x, sr: int, model: str, work: str) -> str:
+    """The vocals stem from a cloud GPU (gpu/run_gpu.py): the source goes up as 24-bit
+    FLAC, the stem comes back the same way. Returns its path."""
+    import subprocess
+    import soundfile as sf
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src, out = work + ".cloud_src.flac", work + ".cloud_vocals.flac"
+    write24(src, x, sr)
+    print("separating on a cloud GPU (gpu/run_gpu.py)", file=sys.stderr, flush=True)
+    # stdin stays the caller's K line: the dispatcher and its CLIs must not read it
+    rc = subprocess.call([sys.executable, os.path.join(root, "gpu", "run_gpu.py"), "separate",
+                          src, out, "--model", model], stdin=subprocess.DEVNULL, stdout=sys.stderr)
+    os.remove(src)
+    if rc != 0 or not os.path.isfile(out):
+        raise RuntimeError(f"cloud separation failed ({rc})")
+    return out
+
+
+def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str, *opts,
+             vocals: str | None = None):
     """Vocals stem at the source rate and channel count; prints "vocals" on stdout once it is
     written. K comes on stdin, sent once the sync knows it, usually during the separation:
     the residual src - vocals is then stretched by K into REST_K as the stem comes out of
     the GPU, so little of the stretch is left when the vocals are done. lls-dsp gets the
     residual as it comes even before K (it splits off the attacks meanwhile); opts are its
-    stretch options. REST_K "-": the vocals only."""
+    stretch options. REST_K "-": the vocals only. vocals: the stem already computed (same rate, channels
+    and length as src), used instead of the model."""
     import contextlib
     import gc
     import logging
@@ -123,14 +209,6 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
                           os.path.join(os.path.dirname(os.path.abspath(model_dir)), "inductor"))
     import numpy as np
     import soundfile as sf
-    import soxr
-    import torch
-    from audio_separator.separator import Separator
-    from audio_separator.separator import separator as sep_mod
-    from scipy import signal
-    # the GPU does the work: more CPU threads only spin (T05E01: 1.9 cores -> 0.75, same
-    # wall time), and in a batch they slow the previous episode's stretch down
-    torch.set_num_threads(1)
     x, sr = sf.read(src, dtype="float32", always_2d=True)
     n, ch = x.shape
 
@@ -192,6 +270,64 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
         abort_mark = object()
         writer = threading.Thread(target=rest_writer, daemon=True)
         writer.start()
+
+    gpu = tmp_vocals = None
+    if vocals is None:
+        if os.environ.get("LLS_ENV") == "cloud":
+            vocals = tmp_vocals = _cloud_vocals(x, sr, model, os.path.abspath(voc_out))
+        else:
+            gpu = _gpu_lock(block=os.environ.get("LLS_GPU_FALLBACK") != "cloud")
+            if gpu is None:
+                print("local GPU busy", file=sys.stderr, flush=True)
+                vocals = tmp_vocals = _cloud_vocals(x, sr, model, os.path.abspath(voc_out))
+    if vocals is not None:
+        voc = sf.SoundFile(voc_out, "w", sr, ch, subtype="FLOAT", format="RF64")
+        done = 0
+        try:
+            info = sf.info(vocals)
+            if info.samplerate != sr or info.frames != n:
+                raise RuntimeError(f"vocals stem {vocals}: {info.frames} frames at {info.samplerate} Hz,"
+                                   f" the source has {n} at {sr} Hz")
+            g = gain24(vocals)
+            for v in sf.blocks(vocals, blocksize=1 << 18, dtype="float32", always_2d=True):
+                if g != 1.0:
+                    v = v * np.float32(g)
+                if v.shape[1] != ch:
+                    v = v.mean(axis=1, keepdims=True) if ch == 1 else np.repeat(v[:, :1], ch, 1)
+                v = v[:n - done]
+                voc.write(v)
+                rest.put(x[done:done + len(v)] - v)
+                done += len(v)
+            if done < n:
+                voc.write(np.zeros((n - done, ch), np.float32))
+                rest.put(x[done:])
+            voc.close()
+        except BaseException:
+            voc.close()
+            rest.put(abort_mark)
+            if writer:
+                writer.join()
+            raise
+        finally:
+            if tmp_vocals:
+                os.remove(tmp_vocals)
+        rest.put(None)
+        _PROTO.write("vocals\n")
+        _PROTO.flush()
+        if writer:
+            writer.join()
+        if err:
+            raise err[0]
+        return
+
+    import soxr
+    import torch
+    from audio_separator.separator import Separator
+    from audio_separator.separator import separator as sep_mod
+    from scipy import signal
+    # the GPU does the work: more CPU threads only spin (T05E01: 1.9 cores -> 0.75, same
+    # wall time), and in a batch they slow the previous episode's stretch down
+    torch.set_num_threads(1)
 
     # fp16 autocast: 1.9x faster on an RTX 4060, 66 dB from the fp32 stem (inaudible)
     tmp = tempfile.mkdtemp(dir=os.path.dirname(os.path.abspath(voc_out)))  # fallback's stem
@@ -306,6 +442,7 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    _gpu_unlock(gpu)
     _PROTO.write("vocals\n")
     _PROTO.flush()
     if writer:
@@ -325,6 +462,9 @@ if __name__ == "__main__":
     if cmd == "stretch":
         stretch(a[0], a[1], float(a[2]))
     elif cmd == "separate":
-        separate(*a)
+        if a[0] == "--vocals":
+            separate(*a[2:], vocals=a[1])
+        else:
+            separate(*a)
     else:
         sys.exit(f"unknown command {cmd}")

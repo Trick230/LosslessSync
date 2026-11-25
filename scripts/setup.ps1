@@ -67,7 +67,8 @@ function Show-Check {
     "gpu         : $g"
     $t = if (Test-Path $SPy) { & $SPy -c "import torch;print('torch', torch.__version__, 'cuda', torch.cuda.is_available())" 2>$null } else { "no venv-sep" }
     "stems python: $ext ($t)"
-    "rclone      : $(Have rclone)"
+    $kt = Test-Path (Join-Path $Venv "Scripts\kaggle.exe"); $mt = Test-Path (Join-Path $Venv "Scripts\modal.exe")
+    "kaggle/modal: $kt/$mt, rclone: $(Have rclone)"
     "media       : LLS_MEDIA_DIR=$env:LLS_MEDIA_DIR LLS_OUT_DIR=$env:LLS_OUT_DIR"
 }
 if ($Check) { Show-Check; exit 0 }
@@ -86,7 +87,14 @@ if (-not (Test-Path $VPy)) {
 }
 Must { & $VPy -m pip install -q --upgrade pip }
 Must { & $VPy -m pip install -q -e $Repo }
+# cloud GPU CLIs (gpu/run_gpu.py); in the cloud the venv is also the torch-free stems helper
 if ($Mode -eq "cloud") { Must { & $VPy -m pip install -q kaggle modal } }
+elseif (-not (Ok { & $VPy -m pip install -q kaggle modal })) { "WARNING: kaggle/modal CLIs not installed (no cloud fallback)" }
+if ($Mode -eq "cloud") {
+    Must { & $VPy -m pip install -q python-stretch soundfile soxr }
+    Persist "LLS_ENV" "cloud"
+    Persist "LOSSLESSSYNC_EXT_PYTHON" $VPy
+}
 $up = [Environment]::GetEnvironmentVariable("Path", "User")
 $vs = Join-Path $Venv "Scripts"
 if (-not (($up -split ";") -contains $vs)) { [Environment]::SetEnvironmentVariable("Path", "$vs;$up", "User") }
