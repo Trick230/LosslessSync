@@ -19,6 +19,7 @@ losslessly (FLAC 24-bit) by default.
 - [Testing](#testing)
 - [Development](#development)
 - [Limitations](#limitations)
+- [License](#license)
 
 ## What it handles
 
@@ -44,7 +45,9 @@ download everything into `.lls/` inside the project, with pinned versions and ch
 uv, Python, the venv (`uv.lock`), a static ffmpeg with `librubberband`, rclone, the
 kaggle and modal CLIs and `lls-dsp` (the native kernels, prebuilt by CI for each version of
 `dsp/`). Nothing goes outside the folder, and no system variable or `PATH` is changed, so a
-copied or moved folder works after `lls setup`. Windows x64, Linux x64 and Linux arm64.
+copied or moved folder works as it is (the venvs are rebuilt from the cache on the next
+`lls`). Windows x64 and ARM64, Linux x64 and arm64; not macOS (there is no static ffmpeg
+with `librubberband` for Apple Silicon).
 
 - Optional, `lls setup --stems`: a second Python (3.11) with CUDA torch, `audio-separator`
   and `python-stretch` in `.lls/<platform>/venv-sep`, plus the separation model in
@@ -61,8 +64,9 @@ copied or moved folder works after `lls setup`. Windows x64, Linux x64 and Linux
   batch: 250 s -> 200 s, and it no longer holds the whole residual in memory).
 - Optional, `lls setup --dev`: Rust in `.lls/` to rebuild `lls-dsp` (`lls cargo build
   --release --features signalsmith`). The `signalsmith` feature compiles C++, so it needs a
-  C++ compiler and libclang; on Windows, point `LLS_MINGW` to a WinLibs GCC with LLVM
-  (`...\mingw64\bin`). `LOSSLESSSYNC_DSP=off` forces the Python code (the WSOLA stretch is
+  C++ compiler and libclang: on Windows x64 `--dev` downloads a WinLibs GCC with LLVM into
+  `.lls/` too (`LLS_MINGW` points to another one); on Linux, the system's GCC and
+  libclang. `LOSSLESSSYNC_DSP=off` forces the Python code (the WSOLA stretch is
   bit-identical, about 6x slower).
 
 ## Installation
@@ -222,9 +226,12 @@ compares a result against it. The variants are `pal`, `tempo` and `none`; `--dro
 a series of lost and muted dropouts, and `--ad`, `--recap`, `--intro`, `--credits` and
 `--channels` add an ad break, a recap, a different intro, sped-up credits and other TV
 layouts. `tools/run_synth.py` runs all thirteen cases end to end and prints PASS/FAIL per
-case:
+case; `tests/` runs the same cases as unit tests:
 
 ```
+lls test                      # quick: pal, tempo, drop_pal
+lls test all                  # all thirteen
+lls test pal,drop_pal         # these
 lls py tools/run_synth.py [test_out] [--cases pal,drop_pal]
 ```
 
@@ -244,7 +251,8 @@ original on a log-mel spectrogram, forgiving +-10 ms of displacement. Lower is b
 ## Development
 
 The project runs in three places: Windows, Linux (CachyOS) and a GPU-less cloud VM.
-`lls setup` sets each one up (`lls check` shows the state). `gpu/run_gpu.py` sends stem separation to a free cloud GPU, and
+`lls setup` sets each one up (`lls check` shows the state). `gpu/run_gpu.py` sends stem
+separation to a free cloud GPU, and
 `tools/media_sync.py` syncs a whole folder, or a Google Drive folder through rclone.
 CI runs the synthetic cases on every push. Workflow, rules and commands are in
 [CLAUDE.md](CLAUDE.md) (Portuguese).
@@ -256,3 +264,7 @@ CI runs the synthetic cases on every push. Workflow, rules and commands are in
   sample-exact.
 - **Dropouts in time-stretched sources.** In these sources, the moment of a lost-audio
   dropout is only located approximately. Its length is still correct.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

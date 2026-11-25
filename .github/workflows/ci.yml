@@ -15,6 +15,7 @@ jobs:
           - {os: ubuntu-latest, lls: ./lls}
           - {os: ubuntu-24.04-arm, lls: ./lls}
           - {os: windows-latest, lls: ./lls.cmd}
+          - {os: windows-11-arm, lls: ./lls.cmd}
     runs-on: ${{ matrix.os }}
     outputs:
       tag: ${{ steps.id.outputs.tag }}
@@ -38,6 +39,15 @@ jobs:
       - name: libclang (Linux)
         if: steps.id.outputs.build == 'True' && runner.os == 'Linux'
         run: sudo apt-get install -y -q libclang-dev
+      - name: toolchain (Windows ARM)
+        if: steps.id.outputs.build == 'True' && matrix.os == 'windows-11-arm'
+        run: |
+          if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+            Invoke-WebRequest -OutFile rustup-init.exe https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
+            ./rustup-init.exe -y --profile minimal
+            "$env:USERPROFILE\.cargo\bin" >> $env:GITHUB_PATH
+          }
+          if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) { choco install llvm -y --no-progress }
       - name: build
         if: steps.id.outputs.build == 'True'
         working-directory: dsp
@@ -89,6 +99,7 @@ jobs:
           - {os: ubuntu-latest, lls: ./lls, all: true}
           - {os: ubuntu-24.04-arm, lls: ./lls}
           - {os: windows-latest, lls: ./lls.cmd}
+          - {os: windows-11-arm, lls: ./lls.cmd}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     defaults:
