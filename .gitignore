@@ -3,3 +3,14 @@ __pycache__/
 /test_out/
 *.egg-info/
 /dsp/target/
+*.mkv
+*.ts
+*.m2ts
+*.mka
+*.flac
+*.wav
+*.ac3
+*.mp2
+/synced/
+/gpu_out/
+.env
