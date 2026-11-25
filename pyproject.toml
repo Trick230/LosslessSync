@@ -1,11 +1,14 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "losslesssync"
 version = "0.1.0"
 description = "Sync a dubbed audio track (e.g. a TV recording) to a reference release using the shared music & effects"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = ["numpy", "scipy"]
 
@@ -15,5 +18,5 @@ losslesssync = "losslesssync.app.cli:main"
 [project.gui-scripts]
 losslesssync-gui = "losslesssync.app.gui:main"
 
-[tool.setuptools]
-packages = ["losslesssync", "losslesssync.app", "losslesssync.sync", "losslesssync.audio", "losslesssync.stretch"]
+[tool.setuptools.packages.find]
+include = ["losslesssync*"]
