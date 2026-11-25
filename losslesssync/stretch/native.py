@@ -1,6 +1,8 @@
 """Locates the optional native kernels (dsp/, written in Rust, binary lls-dsp).
 
-Looked up in $LOSSLESSSYNC_DSP, then dsp/target/release next to the package, then PATH.
+Looked up in $LOSSLESSSYNC_DSP, then the newest build (release or dev-fast profile) in
+dsp/target next to the package or in the shared $CARGO_TARGET_DIR (default ~/.lls/cargo-target),
+then PATH.
 Set LOSSLESSSYNC_DSP=off to force the pure-Python code.
 """
 from __future__ import annotations
@@ -19,10 +21,15 @@ def dsp() -> str | None:
     if env.lower() in ("off", "0", "no"):
         return None
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    for cand in (env, os.path.join(root, "dsp", "target", "release", _EXE), shutil.which(_EXE)):
-        if cand and os.path.isfile(cand):
-            return cand
-    return None
+    if env and os.path.isfile(env):
+        return env
+    shared = os.environ.get("CARGO_TARGET_DIR") or os.path.join(os.path.expanduser("~"), ".lls", "cargo-target")
+    builds = [os.path.join(t, prof, _EXE) for t in (os.path.join(root, "dsp", "target"), shared)
+              for prof in ("release", "dev-fast")]
+    builds = [b for b in builds if os.path.isfile(b)]
+    if builds:
+        return max(builds, key=os.path.getmtime)
+    return shutil.which(_EXE)
 
 
 @lru_cache(maxsize=None)
