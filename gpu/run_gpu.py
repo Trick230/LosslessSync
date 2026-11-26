@@ -5,7 +5,7 @@
 Order: Modal (free monthly credits, spend limit 0 $), Kaggle (free GPU quota, slower to
 start), Colab (no API: prints the manual steps). LONG=1 (long jobs) tries Kaggle first.
 A provider without its CLI or token, or that fails (quota, credits), passes the job on.
-Tokens come from the environment or the repo's .env (see .env.example).
+Tokens come from the environment or the repo's .env (devcloud: dc secrets pull).
 """
 from __future__ import annotations
 

@@ -6,11 +6,12 @@ PC (default): `losslesssync batch` over LLS_MEDIA_DIR (its refs/ and srcs/ folde
 has them, else the folder itself, EN/PT in the names) into LLS_OUT_DIR; episodes already
 done are skipped.
 
-Cloud (--cloud or LLS_ENV=cloud): the rclone remote gdrive: (limited by root_folder_id to
-the Drive folder LosslessSync) with refs/, srcs/ and synced/. One episode at a time: copy
-its two files to .lls/media-cache, sync, upload the flac/json/html/log to
-gdrive:synced/<episode>/, delete that episode's cache. Episodes with their report in
-synced/<episode>/ are skipped. The remote comes from RCLONE_CONFIG_GDRIVE_* (see .env.example).
+Cloud (--cloud or LLS_ENV=cloud): the project's Drive folder through devcloud (`dc drive`,
+https://github.com/Trick230/devcloud) with refs/, srcs/ and synced/. One episode at a time:
+copy its two files to .lls/media-cache, sync, upload the flac/json/html/log to
+synced/<episode>/, delete that episode's cache. Episodes with their report in
+synced/<episode>/ are skipped. dc is found through DEVCLOUD, else .devcloud/ (Actions),
+~/devcloud, ../Tools/devcloud or ../devcloud.
 
 BATCH_OPTIONS go to `losslesssync batch` as they are (e.g. --pitch keep --verify-deep).
 """
@@ -29,7 +30,9 @@ from run_gpu import load_env  # noqa: E402  (.env loader, standard library only)
 from losslesssync import LLS  # noqa: E402
 from losslesssync.app.batch import MEDIA_EXT, episode_key  # noqa: E402
 
-REMOTE = "gdrive:"
+DC_DIRS = [os.environ.get("DEVCLOUD", ""), os.path.join(ROOT, ".devcloud"),
+           os.path.expanduser(os.path.join("~", "devcloud")),
+           os.path.join(ROOT, "..", "Tools", "devcloud"), os.path.join(ROOT, "..", "devcloud")]
 
 
 def batch(ref_dir: str, src_dir: str, out_dir: str, extra: list[str]) -> int:
@@ -48,33 +51,40 @@ def pc(extra: list[str], dry: bool) -> int:
     return batch(refs, srcs, out, extra + (["--dry-run"] if dry else []))
 
 
-def rclone(*args: str, capture: bool = False) -> str:
-    r = subprocess.run(["rclone", *args], text=True, stdin=subprocess.DEVNULL,
-                       capture_output=capture)
+def dc_launcher() -> str:
+    name = "dc.cmd" if os.name == "nt" else "dc"
+    for d in DC_DIRS:
+        if d and os.path.isfile(os.path.join(d, name)):
+            return os.path.abspath(os.path.join(d, name))
+    sys.exit("devcloud not found: clone https://github.com/Trick230/devcloud or set DEVCLOUD")
+
+
+def drive(*args: str, capture: bool = False) -> str:
+    """`dc drive ARGS` in this project (paths are inside its Drive folder)."""
+    r = subprocess.run([dc_launcher(), "drive", *args], text=True, stdin=subprocess.DEVNULL,
+                       capture_output=capture, cwd=ROOT)
     if r.returncode != 0:
-        raise SystemExit(f"rclone {' '.join(args)} failed ({r.returncode}) {r.stderr or ''}")
+        raise SystemExit(f"dc drive {' '.join(args)} failed ({r.returncode}) {r.stderr or ''}")
     return r.stdout or ""
 
 
 def media_files(folder: str) -> dict[str, str]:
-    """{episode key: file name} of a remote folder."""
-    names = [n for n in rclone("lsf", "--files-only", REMOTE + folder, capture=True).splitlines()
+    """{episode key: file name} of a Drive folder."""
+    names = [n for n in drive("ls", "--files", folder, capture=True).splitlines()
              if os.path.splitext(n)[1].lower() in MEDIA_EXT]
     return {episode_key(n): n for n in sorted(names)}
 
 
 def cloud(extra: list[str], dry: bool) -> int:
-    if not shutil.which("rclone"):
-        sys.exit("rclone missing (lls setup installs it)")
     refs, srcs = media_files("refs"), media_files("srcs")
-    done = {d.rstrip("/") for d in rclone("lsf", "--dirs-only", REMOTE + "synced", capture=True).splitlines()}
+    done = {d.rstrip("/") for d in drive("ls", "--dirs", "synced", capture=True).splitlines()}
     cache_root = os.path.join(LLS, "media-cache")
     failed = 0
     for key in sorted(set(refs) & set(srcs)):
         ref, src = refs[key], srcs[key]
         ep = os.path.splitext(src)[0]
-        if ep in done and f"{ep}_synced.json" in rclone(
-                "lsf", f"{REMOTE}synced/{ep}", capture=True).splitlines():
+        if ep in done and f"{ep}_synced.json" in drive(
+                "ls", "--files", f"synced/{ep}", capture=True).splitlines():
             print(f"{key}: done, skipped")
             continue
         print(f"{key}: {ref} <- {src}")
@@ -82,12 +92,12 @@ def cloud(extra: list[str], dry: bool) -> int:
             continue
         cache = os.path.join(cache_root, ep)
         try:
-            rclone("copy", f"{REMOTE}refs/{ref}", os.path.join(cache, "refs"))
-            rclone("copy", f"{REMOTE}srcs/{src}", os.path.join(cache, "srcs"))
+            drive("get", f"refs/{ref}", os.path.join(cache, "refs"))
+            drive("get", f"srcs/{src}", os.path.join(cache, "srcs"))
             out = os.path.join(cache, "out")
             rc = batch(os.path.join(cache, "refs"), os.path.join(cache, "srcs"), out, extra)
             if os.path.isdir(out):        # failed episodes upload their log and report too
-                rclone("copy", out, f"{REMOTE}synced/{ep}", "--include", "*.{flac,json,html,log}")
+                drive("put", out, f"synced/{ep}", "--include", "*.{flac,json,html,log}")
             failed += rc != 0
         finally:
             shutil.rmtree(cache, ignore_errors=True)

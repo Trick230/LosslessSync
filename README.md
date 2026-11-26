@@ -42,7 +42,7 @@ pieces touch get a 4 ms splice guard.
 
 Nothing to install by hand. `lls` (Linux) and `lls.cmd` (Windows) at the repo root
 download everything into `.lls/` inside the project, with pinned versions and checksums:
-uv, Python, the venv (`uv.lock`), a static ffmpeg with `librubberband`, rclone, the
+uv, Python, the venv (`uv.lock`), a static ffmpeg with `librubberband`, the
 kaggle and modal CLIs and `lls-dsp` (the native kernels, prebuilt by CI for each version of
 `dsp/`). Nothing goes outside the folder, and no system variable or `PATH` is changed, so a
 copied or moved folder works as it is (the venvs are rebuilt from the cache on the next
@@ -253,7 +253,9 @@ original on a log-mel spectrogram, forgiving +-10 ms of displacement. Lower is b
 The project runs in three places: Windows, Linux (CachyOS) and a GPU-less cloud VM.
 `lls setup` sets each one up (`lls check` shows the state). `gpu/run_gpu.py` sends stem
 separation to a free cloud GPU, and
-`tools/media_sync.py` syncs a whole folder, or a Google Drive folder through rclone.
+`tools/media_sync.py` syncs a whole folder, or the project's Google Drive folder through
+[devcloud](https://github.com/Trick230/devcloud) (`dc drive`), which also keeps the `.env`
+tokens (`dc secrets pull`) and runs CPU jobs on GitHub Actions (`dc run`).
 CI runs the synthetic cases on every push. Workflow, rules and commands are in
 [CLAUDE.md](CLAUDE.md) (Portuguese).
 

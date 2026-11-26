@@ -2,7 +2,7 @@
 
 Everything the project runs is downloaded into .lls/<platform>/ at the repo root (nothing is
 installed on the system, nothing is added to PATH or the environment for good):
-python/ (uv's), venv/ (uv.lock), bin/ (uv, ffmpeg, ffprobe, rclone, lls-dsp, kaggle, modal),
+python/ (uv's), venv/ (uv.lock), bin/ (uv, ffmpeg, ffprobe, lls-dsp, kaggle, modal),
 venv-sep/ (the stems Python, `setup --stems`), rust/ (`setup --dev`); .lls/models holds the
 separation models. A moved or copied folder works again after `lls setup`.
 
@@ -61,13 +61,6 @@ FFMPEG = {   # static GPL builds (with librubberband); the dated build is pinned
                       f"{FF}/latest/ffmpeg-n8.1-latest-winarm64-gpl-8.1.zip"),
 }
 # macOS is not supported: no static ffmpeg with librubberband for Apple Silicon exists
-RC = f"{GH}/rclone/rclone/releases/download/v1.76.0/rclone-v1.76.0"
-RCLONE = {
-    "windows-x64": (f"{RC}-windows-amd64.zip", "8b4fd2737ade4e70c057ef4a49deb7cffe94b0fb9d7587c189d149823f21a1dc"),
-    "linux-x64": (f"{RC}-linux-amd64.zip", "b00f00b3266c3764413afe599d3ec316f6f43b3e0ea8a0bc1d186d2133e46df7"),
-    "linux-arm64": (f"{RC}-linux-arm64.zip", "ee169016675e23a69d77240565133ff7dbc9b33d16fa8f7053d4af39f1eaeb78"),
-    "windows-arm64": (f"{RC}-windows-arm64.zip", "c406c8a69a5a408e50624aa990fbb0a6266b3a4e83782a94de3cb96f50f86f10"),
-}
 # GCC + libclang for the signalsmith feature of lls-dsp on Windows (setup --dev; LLS_MINGW
 # overrides it)
 WINLIBS = ("https://github.com/brechtsanders/winlibs_mingw/releases/download/16.2.0posix-23.1.3-14.0.0-ucrt-r3/"
@@ -201,12 +194,6 @@ def setup_ffmpeg() -> None:
         extract(fetch(fallback), fallback, names)
     if not has_rubberband():
         raise Fail("ffmpeg has no rubberband filter")
-
-
-def setup_rclone() -> None:
-    if not os.path.isfile(os.path.join(BIN, "rclone" + EXE)):
-        url, sha = RCLONE[PLAT]
-        extract(fetch(url, sha), url, ["rclone" + EXE])
 
 
 # ---------------------------------------------------------------- lls-dsp
@@ -407,7 +394,7 @@ def setup(args: list[str]) -> int:
     cloud = mode() == "cloud"
     say(f"setting up {LOCAL} ({'cloud' if cloud else 'pc'})")
     relocate()
-    steps = [("python + venv", setup_venv), ("ffmpeg", setup_ffmpeg), ("rclone", setup_rclone),
+    steps = [("python + venv", setup_venv), ("ffmpeg", setup_ffmpeg),
              ("kaggle + modal", lambda: setup_cloud_tools(cloud))]
     if "--dev" in args:
         steps.append(("rust", setup_rust))
@@ -445,7 +432,7 @@ def check() -> int:
         if sep == "error":
             sep = "no torch (cloud helper)" if mode() == "cloud" else "broken (lls setup --stems)"
     print(f"stems python: {sep}")
-    tools = ", ".join(f"{t}: {ok(os.path.isfile(os.path.join(BIN, t + EXE)))}" for t in ("kaggle", "modal", "rclone"))
+    tools = ", ".join(f"{t}: {ok(os.path.isfile(os.path.join(BIN, t + EXE)))}" for t in ("kaggle", "modal"))
     print(f"tools       : {tools}, cargo: {cargo() or 'no'}")
     print(f"models      : {', '.join(sorted(f for f in os.listdir(MODELS) if not f.startswith('.'))) if os.path.isdir(MODELS) else 'none'}")
     return 0 if os.path.isfile(vpy) and has_rubberband() else 1
