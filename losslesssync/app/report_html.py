@@ -72,7 +72,7 @@ def _ticks(dur: float, x0: float, w: float, y: float) -> str:
 def _timeline(r: dict) -> str:
     dur = r.get("reference_duration") or 1.0
     W, x0, w = 1000, 10, 980
-    X = lambda t: x0 + max(0.0, min(t, dur)) / dur * w  # noqa: E731
+    X = lambda t: x0 + max(0.0, min(t, dur)) / dur * w
     parts = [f"<rect x={x0} y=10 width={w} height=26 fill='var(--gap)' rx='3'/>"]
     for i, s in enumerate(r.get("segments", [])):
         col = "var(--seg)" if i % 2 == 0 else "var(--seg2)"
@@ -105,8 +105,8 @@ def _verify_plot(r: dict) -> str:
     vals = [abs(e) for _, e in pts if e is not None]
     vals.sort()
     lim = max(2.0, min(10.0, (vals[int(0.95 * (len(vals) - 1))] if vals else 1.0) * 2))
-    Y = lambda e: top + h / 2 - max(-lim, min(lim, e)) / lim * h / 2  # noqa: E731
-    X = lambda t: x0 + t / dur * w  # noqa: E731
+    Y = lambda e: top + h / 2 - max(-lim, min(lim, e)) / lim * h / 2
+    X = lambda t: x0 + t / dur * w
     g = [f"<rect x={x0} y={top} width={w} height={h} fill='none' stroke='var(--line)'/>"]
     for v in (-1.0, 1.0):
         g.append(f"<line x1={x0} x2={x0 + w} y1={Y(v):.1f} y2={Y(v):.1f} stroke='var(--warn)' "

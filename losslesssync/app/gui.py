@@ -212,7 +212,7 @@ class App(tk.Tk):
             self.q.put(("done", rep))
         except media.MediaError as e:
             self.q.put(("error", str(e)))
-        except Exception:  # noqa: BLE001 - show anything to the user
+        except Exception:   # show anything to the user
             self.q.put(("error", traceback.format_exc()))
 
     def _poll(self):

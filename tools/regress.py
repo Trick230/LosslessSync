@@ -108,7 +108,8 @@ def main() -> int:
                "--pitch", "resample", "-o", out, "--report", report]
         print("regress: syncing S01E01 (resample)", flush=True)
         subprocess.run(cmd, check=True, cwd=ROOT, stdout=subprocess.DEVNULL)
-        got = summary(json.load(open(report, encoding="utf-8")))
+        with open(report, encoding="utf-8") as f:
+            got = summary(json.load(f))
     finally:
         if fetched and not a.keep:
             shutil.rmtree(CACHE, ignore_errors=True)
@@ -120,7 +121,8 @@ def main() -> int:
             f.write("\n")
         print(f"regress: baseline written to {BASELINE}")
         return 0
-    ok = compare(json.load(open(BASELINE, encoding="utf-8")), got)
+    with open(BASELINE, encoding="utf-8") as f:
+        ok = compare(json.load(f), got)
     print("regress: PASS" if ok else "regress: FAIL")
     return 0 if ok else 1
 

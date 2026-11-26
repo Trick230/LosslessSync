@@ -41,11 +41,11 @@ def run_case(out_root: str, case: str) -> bool:
         r = subprocess.run([py, "-m", "losslesssync", "sync", "--ref", os.path.join(d, "ref.mka"),
                             "--src", os.path.join(d, "tv.ts"), "-o", os.path.join(d, "out.flac"),
                             "--report", os.path.join(d, "report.json")],
-                           stdout=f, stderr=subprocess.STDOUT, env=env)
+                           stdout=f, stderr=subprocess.STDOUT, env=env, check=False)
     if r.returncode:
         print(f"{case}: sync failed, see {log}")
         return False
-    ok = subprocess.run([py, os.path.join(HERE, "check.py"), d], env=env).returncode == 0
+    ok = subprocess.run([py, os.path.join(HERE, "check.py"), d], env=env, check=False).returncode == 0
     print(f"{case}: {'PASS' if ok else 'FAIL'}")
     return ok
 

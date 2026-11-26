@@ -14,13 +14,15 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from losslesssync.audio import media
-from losslesssync.sync import speed  # noqa: E402
+from losslesssync.sync import speed
 
 
 def main():
     d = sys.argv[1]
-    truth = json.load(open(os.path.join(d, "truth.json")))
-    rep = json.load(open(os.path.join(d, "report.json")))
+    with open(os.path.join(d, "truth.json")) as f:
+        truth = json.load(f)
+    with open(os.path.join(d, "report.json")) as f:
+        rep = json.load(f)
     ok = True
     tempo = truth.get("variant") == "tempo"
     cut_tol = 0.15 if tempo else 0.01

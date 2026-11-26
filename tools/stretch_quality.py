@@ -21,9 +21,9 @@ import numpy as np
 from scipy.signal import stft
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from losslesssync.audio.media import speed_filter  # noqa: E402
-from losslesssync.audio.wavio import read_info  # noqa: E402
-from losslesssync.stretch import wsola  # noqa: E402
+from losslesssync.audio.media import speed_filter
+from losslesssync.audio.wavio import read_info
+from losslesssync.stretch import wsola
 
 K = 1001 / 960
 SR = 48000
@@ -65,8 +65,8 @@ def load(path):
 
 
 def mel_fb(n_fft, sr, n=64, fmin=50.0, fmax=16000.0):
-    mel = lambda f: 2595 * np.log10(1 + f / 700)  # noqa: E731
-    imel = lambda m: 700 * (10 ** (m / 2595) - 1)  # noqa: E731
+    mel = lambda f: 2595 * np.log10(1 + f / 700)
+    imel = lambda m: 700 * (10 ** (m / 2595) - 1)
     pts = imel(np.linspace(mel(fmin), mel(fmax), n + 2))
     f = np.fft.rfftfreq(n_fft, 1 / sr)
     fb = np.zeros((n, len(f)))

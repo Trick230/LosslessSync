@@ -58,7 +58,7 @@ def _stretcher(dst: str, channels: int, sr: int):
     except ImportError:
         exe = None
     if exe:
-        r = subprocess.run([exe, "stretch"], stdin=subprocess.DEVNULL, capture_output=True)
+        r = subprocess.run([exe, "stretch"], stdin=subprocess.DEVNULL, capture_output=True, check=False)
         if b"usage: lls-dsp stretch" not in r.stderr:
             exe = None                   # an older build, WSOLA only
     # a build that takes K on stdin, and the options
@@ -115,7 +115,7 @@ def _gpu_lock(block: bool):
     import tempfile
     import time
     path = os.path.join(tempfile.gettempdir(), "lls-gpu.lock")
-    f = open(path, "a+b")
+    f = open(path, "a+b")   # noqa: SIM115 - held (and the lock with it) until the process exits
     told = False
     while True:
         try:

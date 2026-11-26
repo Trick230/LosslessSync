@@ -42,7 +42,7 @@ class Helper:
         self.cmd = _cmd(opt, *args)
         self.on_gpu_free = None           # called once the separation is done
         self.err_path = os.path.join(tmp, name + ".err")
-        self.err = open(self.err_path, "wb")
+        self.err = open(self.err_path, "wb")   # noqa: SIM115 - the worker's stderr, closed with it
         self.p = subprocess.Popen(self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=self.err, env=_env(), text=True)
 

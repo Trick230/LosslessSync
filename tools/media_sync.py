@@ -73,7 +73,7 @@ def drive(*args: str, capture: bool = False, missing_ok: bool = False) -> str:
     """`dc drive ARGS` in this project (paths are inside its Drive folder); missing_ok: a
     folder that does not exist yet lists as empty."""
     r = subprocess.run([dc_launcher(), "drive", *args], text=True, stdin=subprocess.DEVNULL,
-                       capture_output=capture or QUIET, cwd=ROOT)
+                       capture_output=capture or QUIET, cwd=ROOT, check=False)
     if r.returncode != 0 and missing_ok and "directory not found" in (r.stderr or ""):
         return ""
     if r.returncode != 0:

@@ -29,6 +29,8 @@ extend-exclude = [".lls", "test_out", "temp", "samples"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "I"]
+# files left open, subprocess.run without an explicit check=, stale noqa comments
+extend-select = ["SIM115", "PLW1510", "RUF100"]
 # zip strict=: noisy for same-length arrays; l/I names and named lambdas: kept where they read best
 ignore = ["B905", "E741", "E731"]
 

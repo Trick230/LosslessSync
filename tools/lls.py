@@ -181,7 +181,7 @@ def extract(data: bytes, url: str, names: list[str]) -> None:
         z = zipfile.ZipFile(io.BytesIO(data))
         members = [(m.filename, lambda m=m: z.read(m)) for m in z.infolist() if not m.is_dir()]
     else:
-        t = tarfile.open(fileobj=io.BytesIO(data))
+        t = tarfile.open(fileobj=io.BytesIO(data))   # noqa: SIM115 - in memory; read lazily below
         members = [(m.name, lambda m=m: t.extractfile(m).read())  # type: ignore[union-attr]
                    for m in t.getmembers() if m.isfile()]
     for name, read in members:
@@ -202,7 +202,7 @@ def has_rubberband() -> bool:
     ff = os.path.join(BIN, "ffmpeg" + EXE)
     if not os.path.isfile(ff):
         return False
-    r = subprocess.run([ff, "-hide_banner", "-filters"], capture_output=True, text=True)
+    r = subprocess.run([ff, "-hide_banner", "-filters"], capture_output=True, text=True, check=False)
     return "rubberband" in r.stdout
 
 
@@ -446,7 +446,7 @@ def check() -> int:
 
     def out(cmd) -> str:
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
+            r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120, check=False)
             return (r.stdout.strip() or r.stderr.strip()).splitlines()[-1] if r.returncode == 0 else "error"
         except (OSError, subprocess.SubprocessError, IndexError):
             return "missing"

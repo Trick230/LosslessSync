@@ -40,7 +40,7 @@ def has(sub: str, word: str = "") -> bool:
     exe = dsp()
     if not exe:
         return False
-    r = subprocess.run([exe, sub], stdin=subprocess.DEVNULL, capture_output=True)
+    r = subprocess.run([exe, sub], stdin=subprocess.DEVNULL, capture_output=True, check=False)
     return (sub.encode() in r.stderr) and (word.encode() in r.stderr)
 
 
@@ -49,7 +49,7 @@ def run(*args) -> str:
     if not exe:
         raise RuntimeError("no lls-dsp (lls setup)")
     r = subprocess.run([exe, *map(str, args)], stdin=subprocess.DEVNULL,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if r.returncode != 0:
         raise RuntimeError(f"{exe} failed ({r.returncode}): {r.stderr.decode(errors='replace')[-2000:]}")
     return r.stdout.decode()

@@ -26,7 +26,7 @@ def tool(name: str) -> str:
 
 def run(cmd: list[str], capture: bool = True) -> subprocess.CompletedProcess:
     r = subprocess.run(cmd, stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-                       stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+                       stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, check=False)
     if r.returncode != 0:
         err = r.stderr.decode(errors="replace")[-3000:]
         raise MediaError(f"command failed ({r.returncode}): {' '.join(cmd)}\n{err}")

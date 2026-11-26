@@ -64,7 +64,7 @@ class WavWriter:
     """Writes float32 WAV (RF64 when larger than 4 GB) with a known final length."""
 
     def __init__(self, path: str, frames: int, channels: int, sr: int, mask: int = 0):
-        self.f = open(path, "wb")
+        self.f = open(path, "wb")   # noqa: SIM115 - the writer's own file, closed by close()
         data = frames * channels * 4
         rf64 = data + 100 > 0xFFFFFFFF
         fmt = struct.pack("<HHIIHHHHI16s", 0xFFFE, channels, sr, sr * channels * 4,
