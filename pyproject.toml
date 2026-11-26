@@ -20,3 +20,28 @@ losslesssync-gui = "losslesssync.app.gui:main"
 
 [tool.setuptools.packages.find]
 include = ["losslesssync*"]
+
+# `lls lint`: ruff and mypy (development tools, run through uv from .lls; not dependencies)
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [".lls", "test_out", "temp", "samples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+# zip strict=: noisy for same-length arrays; l/I names and named lambdas: kept where they read best
+ignore = ["B905", "E741", "E731"]
+
+[tool.ruff.lint.per-file-ignores]
+# separate()'s closures run before its final `del` frees the big arrays
+"losslesssync/stretch/ext.py" = ["F821"]
+
+[tool.mypy]
+python_version = "3.14"
+disable_error_code = ["annotation-unchecked"]
+exclude = ["^\\.lls/", "^test_out/", "^temp/"]
+
+# third-party modules without types (or only in the stems Python): a broken import of our own still fails
+[[tool.mypy.overrides]]
+module = ["scipy.*", "soundfile", "soxr", "torch", "audio_separator.*", "python_stretch"]
+ignore_missing_imports = true

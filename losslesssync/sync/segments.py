@@ -233,7 +233,8 @@ def merge_equal(segs: list[Segment], k: float, chunk_s: float,
     segs = sorted(segs, key=lambda s: s.core(k, chunk_s)[0])
     out: list[Segment] = []
     for s in segs:
-        if out and out[-1].method != "coarse" and s.method != "coarse"                 and abs(out[-1].offset - s.offset) < tol:
+        if (out and out[-1].method != "coarse" and s.method != "coarse"
+                and abs(out[-1].offset - s.offset) < tol):
             m = Segment(anchors=out[-1].anchors + s.anchors, fine=out[-1].fine + s.fine)
             summarize_fine(m)
             out[-1] = m

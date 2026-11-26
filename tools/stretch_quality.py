@@ -21,9 +21,9 @@ import numpy as np
 from scipy.signal import stft
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from losslesssync.stretch import wsola  # noqa: E402
 from losslesssync.audio.media import speed_filter  # noqa: E402
-from losslesssync.wavio import read_info  # noqa: E402
+from losslesssync.audio.wavio import read_info  # noqa: E402
+from losslesssync.stretch import wsola  # noqa: E402
 
 K = 1001 / 960
 SR = 48000
@@ -38,7 +38,7 @@ def ffmpeg(args):
 def run_engine(name: str, src: str, dst: str, k: float):
     kind, *par = name.split(":")
     if kind == "wsola":
-        kw = {}
+        kw: dict = {}
         if par:
             kw["tol_ms"] = float(par[0])
         if len(par) > 1 and par[1]:

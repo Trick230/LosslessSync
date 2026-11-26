@@ -16,8 +16,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from ..audio import media
 from ..stretch import stems
-from . import report_html
 from ..sync.pipeline import Options, sync, uses_stems
+from . import report_html
 
 MEDIA_EXT = {".mkv", ".m2ts", ".mts", ".ts", ".mp4", ".m4v", ".mka", ".wav", ".w64", ".flac",
              ".ac3", ".eac3", ".ec3", ".dts", ".thd", ".m4a", ".aac", ".opus", ".mp2", ".mpg"}
@@ -211,7 +211,7 @@ def _run_stems_pipelined(todo, done, log_fn):
             start(i)
             split = pre[i].get()
             if split:
-                split[0].on_gpu_free = lambda i=i: _quiet(start, i + 1, t[5])
+                split[0].on_gpu_free = lambda i=i, t=t: _quiet(start, i + 1, t[5])
             done(t, run_episode(*t[1:], None, split))
             start(i + 1)              # if this episode never reached its stretch
             pre.pop(i).close()
@@ -273,10 +273,10 @@ def batch(ref_dir: str, src_dir: str, out_dir: str, opt: Options, fmt: str = "fl
     else:
         with ProcessPoolExecutor(max_workers=jobs) as ex:
             futs = {ex.submit(run_episode, *t[1:], threads): t for t in todo}
-            for f in as_completed(futs):
-                t = futs[f]
+            for fut in as_completed(futs):
+                t = futs[fut]
                 try:
-                    r = f.result()
+                    r = fut.result()
                 except Exception as e:  # worker died (e.g. out of memory)
                     r = {"status": "error", "seconds": 0.0, "error": f"{type(e).__name__}: {e}"}
                 done(t, r)
@@ -295,13 +295,13 @@ def batch(ref_dir: str, src_dir: str, out_dir: str, opt: Options, fmt: str = "fl
 
     log_fn("")
     log_fn("episode   status   coverage  median ms  p95 ms  dropouts  check")
-    for e in episodes:
-        cov = f"{e['coverage_pct']:.1f}%" if e.get("coverage_pct") is not None else "-"
-        med = f"{e['median_ms']:.3f}" if e.get("median_ms") is not None else "-"
-        mx = f"{e['p95_ms']:.3f}" if e.get("p95_ms") is not None else "-"
-        st = "ok" if e["status"] == "ok" else "skip" if e["status"].startswith("skip") else "ERROR"
-        log_fn(f"{e['episode']:<9} {st:<8} {cov:>8}  {med:>9}  {mx:>6}  {e.get('dropouts', 0) or 0:>8}  "
-               + ("; ".join(e["check"]) or "-"))
+    for ep in episodes:
+        cov = f"{ep['coverage_pct']:.1f}%" if ep.get("coverage_pct") is not None else "-"
+        med = f"{ep['median_ms']:.3f}" if ep.get("median_ms") is not None else "-"
+        mx = f"{ep['p95_ms']:.3f}" if ep.get("p95_ms") is not None else "-"
+        st = "ok" if ep["status"] == "ok" else "skip" if ep["status"].startswith("skip") else "ERROR"
+        log_fn(f"{ep['episode']:<9} {st:<8} {cov:>8}  {med:>9}  {mx:>6}  {ep.get('dropouts', 0) or 0:>8}  "
+               + ("; ".join(ep["check"]) or "-"))
     n_err = sum(e["status"] == "error" for e in episodes)
     log_fn(f"{len(episodes) - n_err}/{len(episodes)} ok, {n_err} error(s), "
            f"{sum(bool(e['check']) for e in episodes)} to check; "

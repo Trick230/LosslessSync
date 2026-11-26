@@ -228,12 +228,15 @@ compares a result against it. The variants are `pal`, `tempo` and `none`; `--dro
 a series of lost and muted dropouts, and `--ad`, `--recap`, `--intro`, `--credits` and
 `--channels` add an ad break, a recap, a different intro, sped-up credits and other TV
 layouts. `tools/run_synth.py` runs all thirteen cases end to end and prints PASS/FAIL per
-case; `tests/` runs the same cases as unit tests:
+case; `tests/` runs the same cases as unit tests, after the fast unit tests of the building
+blocks (`tests/test_units.py`). `lls lint` runs ruff and mypy (pinned versions, fetched by uv
+into `.lls/`; settings in `pyproject.toml`); CI runs both.
 
 ```
-lls test                      # quick: pal, tempo, drop_pal
+lls test                      # unit tests + quick cases: pal, tempo, drop_pal
 lls test all                  # all thirteen
 lls test pal,drop_pal         # these
+lls lint                      # ruff + mypy
 lls py tools/run_synth.py [test_out] [--cases pal,drop_pal]
 ```
 

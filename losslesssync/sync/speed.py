@@ -7,7 +7,7 @@ import numpy as np
 from scipy import fft as sfft
 from scipy.ndimage import uniform_filter1d
 
-from .features import ANA_SR, _nw, features, frame_rms_db, pool, pmap
+from .features import ANA_SR, _nw, features, frame_rms_db, pmap, pool
 
 HOP = 0.01          # coarse feature hop (100 fps)
 POOL = 4            # global search runs at 25 fps
@@ -190,7 +190,7 @@ def detect_speed(src16: np.ndarray, R: np.ndarray, log, n_probe: int = 30) -> tu
     for (name, k), v in zip(SPEED_CANDIDATES.items(), pmap(score, SPEED_CANDIDATES.values())):
         scores[name] = v
         log(f"    speed {name:<18} x{k:.6f}  score {scores[name]:.3f}")
-    best = max(scores, key=scores.get)
+    best = max(scores, key=lambda name: scores[name])
     return SPEED_CANDIDATES[best], scores
 
 

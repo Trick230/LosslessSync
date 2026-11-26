@@ -79,7 +79,7 @@ def _stretcher(dst: str, channels: int, sr: int):
                 p.stdin.write(b.tobytes())
 
             def set_k(kk: float):
-                p.stdin.write(struct.pack("<Id", 0xFFFFFFFF, kk))
+                p.stdin.write(struct.pack("<Id", 0xFFFFFFFF, kk))  # type: ignore[union-attr]
 
             def close():
                 if framed:                   # end of input (a bare EOF is an error)
@@ -95,7 +95,7 @@ def _stretcher(dst: str, channels: int, sr: int):
             if framed and k is not None:
                 set_k(k)
             return feed, set_k, close, abort
-        blocks = []
+        blocks: list = []
 
         def close_ps():
             import soundfile as sf
@@ -119,7 +119,7 @@ def _gpu_lock(block: bool):
     told = False
     while True:
         try:
-            if os.name == "nt":
+            if sys.platform == "win32":
                 import msvcrt
                 f.seek(0)
                 msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
@@ -232,10 +232,11 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
             @staticmethod
             def put(_):
                 pass
-        rest, writer, err, abort_mark = _Drop(), None, [], object()
+        rest, writer, abort_mark = _Drop(), None, object()
+        err: list = []
     else:
         # the residual's blocks, then None (or abort_mark); the ratio line comes in among them
-        rest: queue.Queue = queue.Queue()
+        rest = queue.Queue()  # type: ignore[assignment]
         threading.Thread(target=lambda: rest.put(sys.stdin.readline().strip()),
                          daemon=True).start()
         err = []

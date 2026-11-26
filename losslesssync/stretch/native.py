@@ -46,6 +46,8 @@ def has(sub: str, word: str = "") -> bool:
 
 def run(*args) -> str:
     exe = dsp()
+    if not exe:
+        raise RuntimeError("no lls-dsp (lls setup)")
     r = subprocess.run([exe, *map(str, args)], stdin=subprocess.DEVNULL,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode != 0:

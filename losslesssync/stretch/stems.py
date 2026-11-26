@@ -20,7 +20,7 @@ import numpy as np
 
 from ..audio import media
 from ..audio.wavio import WavWriter, read_info
-from . import native, psola, wsola
+from . import psola, wsola
 
 BLOCK = 1 << 20
 
@@ -174,7 +174,7 @@ def stretch(split, tmp: str, k: float, opt, log, measure):
     job, raw, voc, rest_k = split
     # the helper's lls-dsp writes it next to rest_k (opt.hpss); in a batch the split ran
     # in the prefetch's own dir, not in tmp
-    perc_k = os.path.join(os.path.dirname(rest_k), "perc_k.wav")
+    perc_k: str | None = os.path.join(os.path.dirname(rest_k), "perc_k.wav")
     job.send(repr(k))
     log("  waiting for the vocals separation...")
     job.expect("vocals")
@@ -204,7 +204,7 @@ def stretch(split, tmp: str, k: float, opt, log, measure):
     order = ["vocals", "rest"]
     if not opt.hpss:
         perc_k = None
-    elif not os.path.exists(perc_k):
+    elif perc_k and not os.path.exists(perc_k):
         log("  (this lls-dsp cannot split the attacks off; rest stretched whole)")
         perc_k = None
     with ThreadPoolExecutor(1) as ex:

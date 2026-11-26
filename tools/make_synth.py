@@ -18,7 +18,6 @@ import json
 import os
 import subprocess
 import sys
-
 from fractions import Fraction
 
 import numpy as np
@@ -184,7 +183,7 @@ def main():
     ideal = np.zeros_like(prog)
     for s, e in edits:
         ideal[int(s * SR):int(e * SR)] = prog[int(s * SR):int(e * SR)]
-    for t, d, kind in drops:
+    for t, d, _kind in drops:
         ideal[int(t * SR):int((t + d) * SR)] = 0
     write_wav(os.path.join(a.out, "ideal.wav"), ideal)
 

@@ -29,7 +29,8 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from losslesssync import LLS, dc_launcher as _dc, dotenv  # noqa: E402
+from losslesssync import LLS, dotenv  # noqa: E402
+from losslesssync import dc_launcher as _dc  # noqa: E402
 from losslesssync.app.batch import MEDIA_EXT, episode_key  # noqa: E402
 
 QUIET = os.environ.get("GITHUB_ACTIONS") == "true"   # public logs: no media names
@@ -147,7 +148,7 @@ def main(argv: list[str]) -> int:
     extra = argv[argv.index("--") + 1:] if "--" in argv else []
     own = argv[:argv.index("--")] if "--" in argv else argv
     load_env()
-    sys.stdout.reconfigure(line_buffering=True)   # our lines between batch's
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[union-attr]  # our lines between batch's
     is_cloud = "--cloud" in own or os.environ.get("LLS_ENV") == "cloud"
     dry = "--dry-run" in own
     if not is_cloud:

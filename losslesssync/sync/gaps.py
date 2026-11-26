@@ -5,8 +5,8 @@ import numpy as np
 from scipy.signal import fftconvolve
 
 from .features import ANA_SR, pmap
-from .speed import Anchor, DROPOUT_MAX_JUMP, HOP, NCC_REG, parabolic
 from .segments import Segment, fine_measure, phase_coherent, summarize_fine
+from .speed import DROPOUT_MAX_JUMP, HOP, NCC_REG, Anchor, parabolic
 
 # ---------------------------------------------------------------- signal dropouts
 
@@ -72,13 +72,13 @@ def track_offsets(ref16, src16, Rb, Sb, base_off: float, t0: float, t1: float,
     first = sorted(set(range(0, n, coarse)) | set(range(min(n, edge)))
                    | set(range(max(0, n - edge), n)))
     res = dict(zip(first, pmap(lambda i: one(starts[i]), first)))
-    fill = set()
+    fill: set = set()
     for i, j in zip(first, first[1:]):
         a, b = res[i], res[j]
         if j - i > 1 and (a is None or b is None or abs(a[1] - b[1]) >= tol):
             fill.update(range(max(0, i - edge), min(n, j + edge + 1)))
-    fill = sorted(fill - res.keys())
-    res.update(zip(fill, pmap(lambda i: one(starts[i]), fill)))
+    redo = sorted(fill - res.keys())
+    res.update(zip(redo, pmap(lambda i: one(starts[i]), redo)))
     return [res[i] for i in sorted(res) if res[i] is not None]
 
 

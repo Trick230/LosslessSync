@@ -8,7 +8,8 @@ separation models. A moved or copied folder works again after `lls setup`.
 
     lls setup [--stems] [--dev] [--cloud | --pc]   install or repair (repeatable)
     lls check                                      what is there
-    lls test [all | CASE,CASE...]                  synthetic cases (default pal,tempo,drop_pal)
+    lls test [all | CASE,CASE...]                  unit tests + synthetic cases (default pal,tempo,drop_pal)
+    lls lint                                       ruff + mypy (pinned, fetched by uv into .lls)
     lls py SCRIPT [ARGS]                           a script with the project's Python
     lls cargo ARGS                                 cargo in dsp/ (after setup --dev)
     lls gui                                        the graphical interface
@@ -78,6 +79,8 @@ STEMS_TORCH = ("torch==2.14.1", "https://download.pytorch.org/whl/cu126")
 STEMS = ["audio-separator[gpu]==0.48.0", "python-stretch==0.3.1", "soundfile==0.14.0",
          "soxr==1.1.0"] + (["triton-windows==3.9.0.post30"] if WIN else [])
 STEMS_CLOUD = ["numpy", "python-stretch==0.3.1", "soundfile==0.14.0", "soxr==1.1.0"]
+RUFF, MYPY = "ruff==0.17.6", "mypy==2.4.1"   # `lls lint`; settings in pyproject.toml
+LINT_PATHS = ["losslesssync", "tools", "tests", "gpu"]
 
 
 class Fail(Exception):
@@ -179,7 +182,8 @@ def extract(data: bytes, url: str, names: list[str]) -> None:
         members = [(m.filename, lambda m=m: z.read(m)) for m in z.infolist() if not m.is_dir()]
     else:
         t = tarfile.open(fileobj=io.BytesIO(data))
-        members = [(m.name, lambda m=m: t.extractfile(m).read()) for m in t.getmembers() if m.isfile()]
+        members = [(m.name, lambda m=m: t.extractfile(m).read())  # type: ignore[union-attr]
+                   for m in t.getmembers() if m.isfile()]
     for name, read in members:
         base = name.rsplit("/", 1)[-1]
         if base in names and base not in found:
@@ -447,20 +451,27 @@ def check() -> int:
         except (OSError, subprocess.SubprocessError, IndexError):
             return "missing"
     print(f"platform    : {PLAT} ({mode()}), {LOCAL}")
-    print(f"venv        : {out([vpy, '-c', 'import sys, losslesssync; print(sys.version.split()[0], losslesssync.ROOT)']) if os.path.isfile(vpy) else 'missing'}"
+    ver = "import sys, losslesssync; print(sys.version.split()[0], losslesssync.ROOT)"
+    print(f"venv        : {out([vpy, '-c', ver]) if os.path.isfile(vpy) else 'missing'}"
           f"{'' if venv_fresh() else ' (stale: lls setup)'}")
     print(f"ffmpeg      : {ok(os.path.isfile(os.path.join(BIN, 'ffmpeg' + EXE)))}, rubberband: {ok(has_rubberband())}")
-    native = out([vpy, "-c", "from losslesssync.stretch import native; print(native.dsp())"]) if os.path.isfile(vpy) else "?"
+    native = (out([vpy, "-c", "from losslesssync.stretch import native; print(native.dsp())"])
+              if os.path.isfile(vpy) else "?")
     print(f"lls-dsp     : {native} (sources dsp-{dsp_hash()})")
-    print(f"gpu         : {out(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader']) if shutil.which('nvidia-smi') else 'NVIDIA, no nvidia-smi (driver?)' if nvidia_gpu() else 'none'}")
+    gpu = (out(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"])
+           if shutil.which("nvidia-smi") else "NVIDIA, no nvidia-smi (driver?)" if nvidia_gpu() else "none")
+    print(f"gpu         : {gpu}")
     sep = "missing"
     if os.path.isfile(spy):
-        sep = out([spy, "-c", "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"])
+        torch_ver = "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
+        sep = out([spy, "-c", torch_ver])
         if sep == "error":
             sep = "no torch (cloud helper)" if mode() == "cloud" else "broken (lls setup --stems)"
     print(f"stems python: {sep}")
     print(f"cargo       : {cargo() or 'no'}")
-    print(f"models      : {', '.join(sorted(f for f in os.listdir(MODELS) if not f.startswith('.'))) if os.path.isdir(MODELS) else 'none'}")
+    models = (", ".join(sorted(f for f in os.listdir(MODELS) if not f.startswith(".")))
+              if os.path.isdir(MODELS) else "none")
+    print(f"models      : {models}")
     return 0 if os.path.isfile(vpy) and has_rubberband() else 1
 
 
@@ -488,6 +499,19 @@ def ensure() -> None:
     if not has_rubberband():
         say("ffmpeg")
         setup_ffmpeg()
+
+
+def lint() -> int:
+    """ruff, then mypy against the project's venv (its numpy/scipy types)."""
+    ensure()
+    paths = [os.path.join(ROOT, d) for d in LINT_PATHS]
+    cache = os.path.join(LOCAL, "cache")     # not the repo root
+    rc = uv("tool", "run", "--isolated", RUFF, "check", "--cache-dir", os.path.join(cache, "ruff"),
+            *paths, check=False)
+    rc2 = uv("tool", "run", "--isolated", MYPY, "--config-file", os.path.join(ROOT, "pyproject.toml"),
+             "--cache-dir", os.path.join(cache, "mypy"), "--python-executable", venv_python("venv"),
+             *paths, check=False)
+    return 1 if rc or rc2 else 0
 
 
 def python(args: list[str]) -> int:
@@ -524,6 +548,8 @@ def main(argv: list[str]) -> int:
         if cmd == "test":                    # tests/: LLS_CASES picks the synthetic cases
             os.environ["LLS_CASES"] = rest[0] if rest else os.environ.get("LLS_CASES", "")
             return python(["-m", "unittest", "discover", "-v", "-s", os.path.join(ROOT, "tests")])
+        if cmd == "lint":
+            return lint()
         if cmd == "gui":
             return python(["-c", "from losslesssync.app.gui import main; main()"])
         return python(["-m", "losslesssync", cmd, *rest])

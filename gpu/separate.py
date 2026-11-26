@@ -51,6 +51,7 @@ def run(src: str, out: str, model: str = MODEL) -> None:
 
 def prepare(model: str = MODEL) -> None:
     import logging
+
     from audio_separator.separator import Separator
     Separator(model_file_dir=model_dir(), log_level=logging.WARNING).load_model(model_filename=model)
 

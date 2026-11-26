@@ -97,7 +97,7 @@ def verify_window(ref16: np.ndarray, out16: np.ndarray, t: float, win: float = 6
     rs += [segments.fine_measure(ref16, out16, u, oq, sub, max_lag=0.1)
            for u in np.linspace(t, t + win - sub, 3)]
     v = [r[0] - off for r in rs if r is not None]
-    best = []
+    best: list = []
     for c in v:
         g = [x for x in v if abs(x - c) <= max(0.001, 0.1 * abs(c))]
         if len(g) > len(best):
@@ -149,7 +149,7 @@ def verify(ref16: np.ndarray, out16: np.ndarray, pieces: list[dict], win: float 
 
 def unmeasured_spans(points: list, win: float = 6.0) -> list[tuple[float, float]]:
     """Runs of verify windows that could not be measured, as (start, end) in seconds."""
-    spans = []
+    spans: list = []
     for c, e in points:
         if e is not None:
             continue
@@ -248,7 +248,9 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     if opt.pitch == "auto":
         mode, pitch_info = speed.detect_pitch_mode(ref16, src16, anchors, k, opt.chunk_s)
         if abs(k - 1) > 1e-4:
-            log(f"  pitch: {'speed-up with pitch shift -> resample' if mode == 'resample' else 'pitch already corrected -> time-stretch'}"
+            what = ("speed-up with pitch shift -> resample" if mode == "resample"
+                    else "pitch already corrected -> time-stretch")
+            log(f"  pitch: {what}"
                 f" (shift {pitch_info.get('best_shift_bins')} bins, "
                 f"expected {pitch_info.get('expected_shift_bins', 0):.1f})")
         elif abs(pitch_info.get("best_shift_bins") or 0) >= 4:

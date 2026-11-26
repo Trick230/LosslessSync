@@ -13,7 +13,7 @@ from scipy.ndimage import uniform_filter1d
 from .cuts import HOP, _refine_coherent, best_cut, coherence_sim, local_sim
 from .features import ANA_SR, features
 from .segments import Segment
-from .speed import find_anchors, gcc_phat, is_confident, active_mask
+from .speed import active_mask, find_anchors, gcc_phat, is_confident
 
 MIN_HOLE = 4.0            # shortest ref hole searched (s)
 MAX_SPAN = 150.0          # longest ref span searched (s)

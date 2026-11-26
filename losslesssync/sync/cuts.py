@@ -6,9 +6,9 @@ from scipy import fft as sfft
 from scipy.ndimage import binary_dilation, uniform_filter1d
 
 from .features import ANA_SR, _nw
-from .speed import DROPOUT_MAX_JUMP, HOP, NCC_REG
-from .segments import FLUX_HOP, Segment, _flux_bands, phase_coherent
 from .gaps import _energy_db, dropout_gaps
+from .segments import FLUX_HOP, Segment, _flux_bands, phase_coherent
+from .speed import DROPOUT_MAX_JUMP, HOP, NCC_REG
 
 # ---------------------------------------------------------------- cut points
 
@@ -87,6 +87,7 @@ def best_cut(sA, sB, tau: float = 0.08, gap_pen: float = 3.0, expected_gap: int 
     PB = np.concatenate([[0.0], np.cumsum(sB)]) if sB is not None else None
     PG = tau * np.arange(n + 1)
     if PA is None:   # gap -> B
+        assert PB is not None
         val = PG - PB + PB[-1] - gap_pen * (np.arange(n + 1) > 0)
         return 0, int(np.argmax(val))
     if PB is None:   # A -> gap
@@ -148,7 +149,6 @@ def place_segments(segs: list[Segment], R: np.ndarray, S: np.ndarray, ref_dur: f
     level = {}
     for s in segs:
         lo, hi = s.core(k, chunk_s)
-        vals = []
         for phase in (True, False):
             if phase and s.method != "phat":
                 continue
@@ -156,8 +156,8 @@ def place_segments(segs: list[Segment], R: np.ndarray, S: np.ndarray, ref_dur: f
             for t in np.linspace(lo, max(lo, hi - 1.0), 12):
                 x = sim(s, int(t * fps), int((t + 1.0) * fps), phase)
                 v.append(x[x > -1e2])
-            v = np.concatenate(v) if v else np.zeros(0)
-            level[(id(s), phase)] = float(np.median(v)) if len(v) else 0.3
+            va = np.concatenate(v) if v else np.zeros(0)
+            level[(id(s), phase)] = float(np.median(va)) if len(va) else 0.3
 
     def tau_for(pair, phase):
         lv = min(level.get((id(s), phase), 0.3) for s in pair)
@@ -177,6 +177,7 @@ def place_segments(segs: list[Segment], R: np.ndarray, S: np.ndarray, ref_dur: f
             # the first/last anchor centre can sit just outside the programme (its
             # window only partly matched): search a margin into the segment too
             if A is None:
+                assert Bs is not None
                 f0, f1 = 0, int((Bs.core(k, chunk_s)[0] + margin) * fps)
             elif Bs is None:
                 f0, f1 = int(max(0.0, A.core(k, chunk_s)[1] - margin) * fps), n_ref
@@ -291,7 +292,8 @@ def _locate_switch(ref16, src16, A: Segment, B: Segment, g: float, span: float =
     """Place the switch from A to B at 1 ms, with a ref gap of g s between them (a lost-audio
     skip: g = B.offset - A.offset; extra source material such as an ad: g = 0): band levels
     of the ref against the source at A's offset before the cut and at B's offset after it.
-    Works without phase coherence (time-stretched sources). Bands are weighted by how well ref and source agree in the context on both sides, which mutes
+    Works without phase coherence (time-stretched sources). Bands are weighted by how well ref and
+    source agree in the context on both sides, which mutes
     the bands where only the dialogue (different language) lives."""
     sr = ANA_SR
     lo = max(A.ref_start + 0.1, A.ref_end - span)
@@ -365,9 +367,9 @@ def refine_edges(segs: list[Segment], src16: np.ndarray, ref_dur: float,
             t = a.ref_end
             steps = [(_snap(src16, t - b.offset, "start", search=0.5), b.offset),
                      (_snap(src16, t - a.offset, "end", search=0.5), a.offset)]
-            steps = [x + o for x, o in steps if x is not None]
-            if steps:
-                a.ref_end = b.ref_start = min(steps, key=lambda u: abs(u - t))
+            found = [x + o for x, o in steps if x is not None]
+            if found:
+                a.ref_end = b.ref_start = min(found, key=lambda u: abs(u - t))
             split.update((("end", i), ("start", i + 1)))
             continue
         # Source runs on across the cut: the TV edit is somewhere in it, and the ref gap
@@ -466,7 +468,8 @@ def _refine_coherent(segs: list[Segment], ref16, src16, ref_dur: float,
             level(s, t + search, t + search + ctx)
         if lv < min_coh or hi - lo < 4 * _FINE_HOP:
             return
-        lv_l = level(s, t - ctx - search, t - search, _LOC_NFFT) if kind == "end" else             level(s, t + search, t + search + ctx, _LOC_NFFT)
+        lv_l = (level(s, t - ctx - search, t - search, _LOC_NFFT) if kind == "end"
+                else level(s, t + search, t + search + ctx, _LOC_NFFT))
         f0, cl = _fine_coh(ref16, src16, s.offset, lo, hi, _LOC_NFFT)
         c = check(s.offset, lo, hi, f0)
         d = cl - 0.5 * lv_l
@@ -513,7 +516,7 @@ def _refine_coherent(segs: list[Segment], ref16, src16, ref_dur: float,
         a.ref_end, b.ref_start = float(tb[m]), float(tb[m]) + g
         return True
 
-    done = set()
+    done: set = set()
     for i, (a, b) in enumerate(zip(segs, segs[1:])):
         if not (phase_coherent(a) and phase_coherent(b)):
             continue

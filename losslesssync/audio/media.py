@@ -77,7 +77,7 @@ def audio_streams(path: str) -> list[AudioStream]:
     fmt = info.get("format", {})
     fmt_start = float(fmt.get("start_time", 0) or 0)
     fmt_dur = _parse_duration(fmt.get("duration"))
-    out = []
+    out: list = []
     for s in info.get("streams", []):
         if s.get("codec_type") != "audio":
             continue

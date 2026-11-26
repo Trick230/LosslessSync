@@ -17,7 +17,8 @@ STAGES = {"decode": (0.00, 0.10), "speed": (0.10, 0.05), "anchors": (0.15, 0.30)
           "verify": (0.80, 0.10), "encode": (0.90, 0.10), "done": (1.0, 0.0)}
 STAGE_NAMES = {"decode": "a descodificar", "speed": "a detetar velocidade",
                "anchors": "a procurar correspondências", "correct": "a corrigir velocidade",
-               "fine": "a afinar offsets", "dropouts": "a procurar falhas de sinal", "render": "a montar", "verify": "a verificar",
+               "fine": "a afinar offsets", "dropouts": "a procurar falhas de sinal", "render": "a montar",
+               "verify": "a verificar",
                "encode": "a codificar", "done": "concluído"}
 AUTO = "auto"
 
