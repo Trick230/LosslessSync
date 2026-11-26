@@ -32,13 +32,30 @@ def venv_python(name: str) -> str:
     return os.path.join(LOCAL, name, sub, exe)
 
 
+def dotenv() -> dict:
+    """KEY=VALUE lines of the repo's .env (devcloud: dc secrets pull; the lines after
+    `# dc: local` are this machine's own), empty values left out."""
+    res = {}
+    try:
+        with open(os.path.join(ROOT, ".env"), encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    if v.strip().strip('"').strip("'"):
+                        res[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return res
+
+
 def dc_launcher() -> str | None:
-    """devcloud's dc (https://github.com/Trick230/devcloud): $DEVCLOUD, ~/devcloud or next to
-    the repo; it runs the cloud GPU jobs and the Drive."""
+    """devcloud's dc (https://github.com/Trick230/devcloud): DEVCLOUD (environment or .env),
+    .devcloud/ (devcloud's Actions runner) or ~/devcloud; it runs the cloud GPU jobs and the
+    Drive."""
     name = "dc.cmd" if os.name == "nt" else "dc"
-    for d in (os.environ.get("DEVCLOUD", ""), os.path.join(ROOT, ".devcloud"),
-              os.path.expanduser(os.path.join("~", "devcloud")),
-              os.path.join(ROOT, "..", "Tools", "devcloud"), os.path.join(ROOT, "..", "devcloud")):
+    for d in (os.environ.get("DEVCLOUD") or dotenv().get("DEVCLOUD", ""),
+              os.path.join(ROOT, ".devcloud"), os.path.expanduser(os.path.join("~", "devcloud"))):
         if d and os.path.isfile(os.path.join(d, name)):
             return os.path.abspath(os.path.join(d, name))
     return None

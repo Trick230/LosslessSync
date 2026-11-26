@@ -10,8 +10,8 @@ Cloud (--cloud or LLS_ENV=cloud): the project's Drive folder through devcloud (`
 https://github.com/Trick230/devcloud) with refs/, srcs/ and synced/. One episode at a time:
 copy its two files to .lls/media-cache, sync, upload the flac/json/html/log to
 synced/<episode>/, delete that episode's cache. Episodes with their report in
-synced/<episode>/ are skipped. dc is found through DEVCLOUD, else .devcloud/ (Actions),
-~/devcloud, ../Tools/devcloud or ../devcloud.
+synced/<episode>/ are skipped. dc is found through DEVCLOUD (environment or .env), else
+.devcloud/ (Actions) or ~/devcloud.
 
 BATCH_OPTIONS go to `losslesssync batch` as they are (e.g. --pitch keep --verify-deep).
 """
@@ -24,7 +24,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from losslesssync import LLS, dc_launcher as _dc  # noqa: E402
+from losslesssync import LLS, dc_launcher as _dc, dotenv  # noqa: E402
 from losslesssync.app.batch import MEDIA_EXT, episode_key  # noqa: E402
 
 
@@ -51,17 +51,8 @@ def dc_launcher() -> str:
 def load_env() -> None:
     """KEY=VALUE lines of the repo's .env (devcloud: dc secrets pull), without overriding the
     environment."""
-    p = os.path.join(ROOT, ".env")
-    if not os.path.isfile(p):
-        return
-    with open(p, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                v = v.strip().strip('"').strip("'")
-                if v:
-                    os.environ.setdefault(k.strip(), v)
+    for k, v in dotenv().items():
+        os.environ.setdefault(k, v)
 
 
 def drive(*args: str, capture: bool = False) -> str:
