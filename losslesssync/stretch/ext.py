@@ -14,7 +14,7 @@
 One separation uses the local GPU at a time (lls-gpu.lock in the system temp folder,
 across worktrees). With
 LLS_ENV=cloud, or with LLS_GPU_FALLBACK=cloud while the lock is held, the vocals come from a
-cloud GPU through gpu/run_gpu.py (same model and settings).
+cloud GPU through devcloud's `dc gpu` and gpu/separate.py (same model and settings).
 
 Only numpy and soundfile from the main package's dependencies are needed here, so the
 helper Python can be a venv with torch (see README). Outputs are float WAV.
@@ -170,18 +170,30 @@ def gain24(path: str) -> float:
 
 
 def _cloud_vocals(x, sr: int, model: str, work: str) -> str:
-    """The vocals stem from a cloud GPU (gpu/run_gpu.py): the source goes up as 24-bit
-    FLAC, the stem comes back the same way. Returns its path."""
+    """The vocals stem from a cloud GPU (devcloud's `dc gpu` with gpu/separate.json): the
+    source goes up as 24-bit FLAC, the stem comes back the same way. Returns its path."""
+    import shutil
     import subprocess
-    import soundfile as sf
+    import tempfile
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    src, out = work + ".cloud_src.flac", work + ".cloud_vocals.flac"
+    sys.path.insert(0, root)
+    from losslesssync import dc_launcher
+    dc = dc_launcher()
+    if not dc:
+        raise RuntimeError("cloud separation needs devcloud (https://github.com/Trick230/devcloud)")
+    d = tempfile.mkdtemp(dir=os.path.dirname(work))
+    src, out = os.path.join(d, "src.flac"), work + ".cloud_vocals.flac"
     write24(src, x, sr)
-    print("separating on a cloud GPU (gpu/run_gpu.py)", file=sys.stderr, flush=True)
+    print("separating on a cloud GPU (dc gpu)", file=sys.stderr, flush=True)
     # stdin stays the caller's K line: the dispatcher and its CLIs must not read it
-    rc = subprocess.call([sys.executable, os.path.join(root, "gpu", "run_gpu.py"), "separate",
-                          src, out, "--model", model], stdin=subprocess.DEVNULL, stdout=sys.stderr)
-    os.remove(src)
+    long = ["--long"] if os.environ.get("LLS_GPU_LONG") == "1" else []   # Kaggle first
+    rc = subprocess.call([dc, "gpu", *long, os.path.join(root, "gpu", "separate.json"),
+                          "--in", src, "--out", d, "--", "--model", model],
+                         stdin=subprocess.DEVNULL, stdout=sys.stderr)
+    got = os.path.join(d, "vocals.flac")
+    if rc == 0 and os.path.isfile(got):
+        shutil.move(got, out)
+    shutil.rmtree(d, ignore_errors=True)
     if rc != 0 or not os.path.isfile(out):
         raise RuntimeError(f"cloud separation failed ({rc})")
     return out

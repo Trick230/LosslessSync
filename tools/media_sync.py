@@ -24,15 +24,8 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "gpu"))
-from run_gpu import load_env  # noqa: E402  (.env loader, standard library only)
-
-from losslesssync import LLS  # noqa: E402
+from losslesssync import LLS, dc_launcher as _dc  # noqa: E402
 from losslesssync.app.batch import MEDIA_EXT, episode_key  # noqa: E402
-
-DC_DIRS = [os.environ.get("DEVCLOUD", ""), os.path.join(ROOT, ".devcloud"),
-           os.path.expanduser(os.path.join("~", "devcloud")),
-           os.path.join(ROOT, "..", "Tools", "devcloud"), os.path.join(ROOT, "..", "devcloud")]
 
 
 def batch(ref_dir: str, src_dir: str, out_dir: str, extra: list[str]) -> int:
@@ -52,11 +45,23 @@ def pc(extra: list[str], dry: bool) -> int:
 
 
 def dc_launcher() -> str:
-    name = "dc.cmd" if os.name == "nt" else "dc"
-    for d in DC_DIRS:
-        if d and os.path.isfile(os.path.join(d, name)):
-            return os.path.abspath(os.path.join(d, name))
-    sys.exit("devcloud not found: clone https://github.com/Trick230/devcloud or set DEVCLOUD")
+    return _dc() or sys.exit("devcloud not found: clone https://github.com/Trick230/devcloud or set DEVCLOUD")
+
+
+def load_env() -> None:
+    """KEY=VALUE lines of the repo's .env (devcloud: dc secrets pull), without overriding the
+    environment."""
+    p = os.path.join(ROOT, ".env")
+    if not os.path.isfile(p):
+        return
+    with open(p, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                v = v.strip().strip('"').strip("'")
+                if v:
+                    os.environ.setdefault(k.strip(), v)
 
 
 def drive(*args: str, capture: bool = False) -> str:

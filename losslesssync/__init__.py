@@ -32,5 +32,17 @@ def venv_python(name: str) -> str:
     return os.path.join(LOCAL, name, sub, exe)
 
 
+def dc_launcher() -> str | None:
+    """devcloud's dc (https://github.com/Trick230/devcloud): $DEVCLOUD, ~/devcloud or next to
+    the repo; it runs the cloud GPU jobs and the Drive."""
+    name = "dc.cmd" if os.name == "nt" else "dc"
+    for d in (os.environ.get("DEVCLOUD", ""), os.path.join(ROOT, ".devcloud"),
+              os.path.expanduser(os.path.join("~", "devcloud")),
+              os.path.join(ROOT, "..", "Tools", "devcloud"), os.path.join(ROOT, "..", "devcloud")):
+        if d and os.path.isfile(os.path.join(d, name)):
+            return os.path.abspath(os.path.join(d, name))
+    return None
+
+
 if os.path.isdir(BIN) and BIN not in os.environ.get("PATH", "").split(os.pathsep):
     os.environ["PATH"] = BIN + os.pathsep + os.environ.get("PATH", "")

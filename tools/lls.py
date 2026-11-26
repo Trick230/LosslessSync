@@ -2,7 +2,7 @@
 
 Everything the project runs is downloaded into .lls/<platform>/ at the repo root (nothing is
 installed on the system, nothing is added to PATH or the environment for good):
-python/ (uv's), venv/ (uv.lock), bin/ (uv, ffmpeg, ffprobe, lls-dsp, kaggle, modal),
+python/ (uv's), venv/ (uv.lock), bin/ (uv, ffmpeg, ffprobe, lls-dsp),
 venv-sep/ (the stems Python, `setup --stems`), rust/ (`setup --dev`); .lls/models holds the
 separation models. A moved or copied folder works again after `lls setup`.
 
@@ -15,8 +15,8 @@ separation models. A moved or copied folder works again after `lls setup`.
     lls sync|batch|probe ...                       the losslesssync CLI
 
 --stems: torch + audio-separator for --keep-engine stems (3-5 GB; NVIDIA GPU). --cloud: no
-torch, separation through gpu/run_gpu.py. --dev: Rust in .lls to rebuild lls-dsp (otherwise
-it is the binary CI built for these exact dsp/ sources).
+torch, separation on a cloud GPU through devcloud (`dc gpu gpu/separate.json`). --dev: Rust
+in .lls to rebuild lls-dsp (otherwise it is the binary CI built for these exact dsp/ sources).
 """
 from __future__ import annotations
 
@@ -68,7 +68,6 @@ WINLIBS = ("https://github.com/brechtsanders/winlibs_mingw/releases/download/16.
            "1f04e482797dc5f71fe2875cf2b743bfb9f5fd1de0955fdd3118438c0432ba5f")
 RUST_HOST = {"windows-x64": "x86_64-pc-windows-gnu", "windows-arm64": "aarch64-pc-windows-msvc",
              "linux-x64": "x86_64-unknown-linux-gnu", "linux-arm64": "aarch64-unknown-linux-gnu"}
-CLOUD_TOOLS = ["kaggle==2.2.5", "modal==1.6.4"]
 STEMS_TORCH = ("torch==2.14.1", "https://download.pytorch.org/whl/cu126")
 STEMS = ["audio-separator[gpu]==0.48.0", "python-stretch==0.3.1", "soundfile==0.14.0",
          "soxr==1.1.0"] + (["triton-windows==3.9.0.post30"] if WIN else [])
@@ -327,20 +326,8 @@ def venv_fresh() -> bool:
         return False
 
 
-def setup_cloud_tools(required: bool) -> None:
-    for spec in CLOUD_TOOLS:
-        name = spec.split("=")[0]
-        if os.path.isfile(os.path.join(BIN, name + EXE)):
-            continue
-        if uv("tool", "install", "-q", "--python", PY, spec, check=False):
-            msg = f"{name} CLI not installed (no cloud GPU)"
-            if required:
-                raise Fail(msg)
-            say("WARNING: " + msg)
-
-
 def relocate() -> None:
-    """A copied or moved folder: the venvs and the kaggle/modal shims hold absolute paths, so
+    """A copied or moved folder: the venvs hold absolute paths, so
     they are rebuilt (from the cache in .lls, no download)."""
     stamp = os.path.join(LOCAL, "root")
     try:
@@ -355,15 +342,11 @@ def relocate() -> None:
         say(f"folder moved ({old} -> {LOCAL}): rebuilding the venvs")
         for d in ("venv", "venv-sep", "tools"):
             shutil.rmtree(os.path.join(LOCAL, d), ignore_errors=True)
-        for t in ("kaggle", "modal"):
-            if os.path.isfile(os.path.join(BIN, t + EXE)):
-                os.remove(os.path.join(BIN, t + EXE))
     os.makedirs(LOCAL, exist_ok=True)
     with open(stamp, "w") as f:
         f.write(LOCAL)
     if old is not None:
         setup_venv()
-        setup_cloud_tools(False)
         if sep:
             setup_stems(mode() == "cloud")
 
@@ -394,8 +377,7 @@ def setup(args: list[str]) -> int:
     cloud = mode() == "cloud"
     say(f"setting up {LOCAL} ({'cloud' if cloud else 'pc'})")
     relocate()
-    steps = [("python + venv", setup_venv), ("ffmpeg", setup_ffmpeg),
-             ("kaggle + modal", lambda: setup_cloud_tools(cloud))]
+    steps = [("python + venv", setup_venv), ("ffmpeg", setup_ffmpeg)]
     if "--dev" in args:
         steps.append(("rust", setup_rust))
     steps.append(("lls-dsp", build_dsp if "--dev" in args else setup_dsp))
@@ -432,8 +414,7 @@ def check() -> int:
         if sep == "error":
             sep = "no torch (cloud helper)" if mode() == "cloud" else "broken (lls setup --stems)"
     print(f"stems python: {sep}")
-    tools = ", ".join(f"{t}: {ok(os.path.isfile(os.path.join(BIN, t + EXE)))}" for t in ("kaggle", "modal"))
-    print(f"tools       : {tools}, cargo: {cargo() or 'no'}")
+    print(f"cargo       : {cargo() or 'no'}")
     print(f"models      : {', '.join(sorted(f for f in os.listdir(MODELS) if not f.startswith('.'))) if os.path.isdir(MODELS) else 'none'}")
     return 0 if os.path.isfile(vpy) and has_rubberband() else 1
 
