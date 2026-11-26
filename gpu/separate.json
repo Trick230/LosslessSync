@@ -3,7 +3,7 @@
   "script": "separate.py",
   "files": ["../losslesssync/stretch/ext.py"],
   "pip": ["torch", "audio-separator[gpu]", "soundfile", "soxr", "numpy", "scipy"],
-  "apt": ["build-essential"],
+  "apt": ["build-essential", "ffmpeg"],
   "prepare": true,
   "gpu": "T4",
   "kaggle_gpu": "NvidiaTeslaT4",
