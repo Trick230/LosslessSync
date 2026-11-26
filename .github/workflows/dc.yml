@@ -11,8 +11,18 @@ on:
       drive_in: {default: ""}
       drive_out: {default: ""}
       artifacts: {default: ""}
+  workflow_call:   # the project's own workflows reuse it: `uses: ./.github/workflows/dc.yml`
+    inputs:
+      id: {type: string, default: ""}
+      commands: {type: string, required: true}
+      os: {type: string, default: ubuntu-latest}
+      drive_in: {type: string, default: ""}
+      drive_out: {type: string, default: ""}
+      artifacts: {type: string, default: ""}
+    secrets:
+      DC_ENV: {required: false}
 jobs:
   run:
-    uses: Trick230/devcloud/.github/workflows/run.yml@8e655bc247e448c733fe9c0d02f0a4b18a52d31f
-    with: {commands: "${{ inputs.commands }}", os: "${{ inputs.os }}", drive_in: "${{ inputs.drive_in }}", drive_out: "${{ inputs.drive_out }}", artifacts: "${{ inputs.artifacts }}", ref: 8e655bc247e448c733fe9c0d02f0a4b18a52d31f}
+    uses: Trick230/devcloud/.github/workflows/run.yml@f8bc116f1233e37a1fe3de0925e80a0000e32449
+    with: {commands: "${{ inputs.commands }}", os: "${{ inputs.os }}", drive_in: "${{ inputs.drive_in }}", drive_out: "${{ inputs.drive_out }}", artifacts: "${{ inputs.artifacts }}", ref: f8bc116f1233e37a1fe3de0925e80a0000e32449}
     secrets: {DC_ENV: "${{ secrets.DC_ENV }}"}

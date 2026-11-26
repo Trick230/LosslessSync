@@ -138,3 +138,12 @@ jobs:
             test_out/**/*.log
             test_out/**/*.txt
           if-no-files-found: ignore
+
+  # a real episode synced and compared with tools/regress.json; the episode comes from the
+  # project's Drive through devcloud (secrets: not on pull requests) and never leaves the job
+  regress:
+    needs: [dsp, release]
+    if: always() && needs.dsp.result == 'success' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/dc.yml
+    with: {id: ci, commands: '["./lls setup && ./lls py tools/regress.py"]'}
+    secrets: {DC_ENV: "${{ secrets.DC_ENV }}"}
