@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -408,7 +409,10 @@ def setup(args: list[str]) -> int:
             f.write("cloud" if "--cloud" in args else "pc")
     cloud = mode() == "cloud"
     say(f"setting up {LOCAL} ({'cloud' if cloud else 'pc'})")
+    t0 = t = time.monotonic()
     relocate()
+    if time.monotonic() - t > 0.5:
+        say(f"relocate: {time.monotonic() - t:.1f} s")
     steps = [("python + venv", setup_venv), ("ffmpeg", setup_ffmpeg)]
     if "--dev" in args:
         steps.append(("rust", setup_rust))
@@ -417,7 +421,10 @@ def setup(args: list[str]) -> int:
         steps.append(("stems python", lambda: setup_stems(cloud)))
     for name, fn in steps:
         say(name)
+        t = time.monotonic()
         fn()
+        say(f"{name}: {time.monotonic() - t:.1f} s")
+    say(f"setup: {time.monotonic() - t0:.1f} s")
     return check()
 
 
