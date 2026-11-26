@@ -118,8 +118,8 @@ def mode() -> str:
     try:
         with open(os.path.join(LOCAL, "mode")) as f:
             return f.read().strip()
-    except OSError:
-        return "pc"
+    except OSError:   # not set up yet: a Claude Code web sandbox is the cloud
+        return "cloud" if os.environ.get("CLAUDE_CODE_REMOTE") else "pc"
 
 
 # ---------------------------------------------------------------- downloads
