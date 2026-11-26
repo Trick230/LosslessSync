@@ -113,12 +113,27 @@ def run_env() -> dict:
     return env
 
 
+def nvidia_gpu() -> bool:
+    """An NVIDIA GPU in this machine, whatever its driver (nouveau has no nvidia-smi)."""
+    if shutil.which("nvidia-smi"):
+        return True
+    pci = "/sys/bus/pci/devices"
+    for d in (os.listdir(pci) if os.path.isdir(pci) else []):
+        try:
+            with open(os.path.join(pci, d, "vendor")) as v, open(os.path.join(pci, d, "class")) as c:
+                if v.read().strip() == "0x10de" and c.read().startswith("0x03"):   # display
+                    return True
+        except OSError:
+            pass
+    return False
+
+
 def mode() -> str:
     try:
         with open(os.path.join(LOCAL, "mode")) as f:
             return f.read().strip()
     except OSError:   # not set up yet: a machine without an NVIDIA GPU separates in the cloud
-        return "pc" if shutil.which("nvidia-smi") else "cloud"
+        return "pc" if nvidia_gpu() else "cloud"
 
 
 # ---------------------------------------------------------------- downloads
@@ -407,7 +422,7 @@ def check() -> int:
     print(f"ffmpeg      : {ok(os.path.isfile(os.path.join(BIN, 'ffmpeg' + EXE)))}, rubberband: {ok(has_rubberband())}")
     native = out([vpy, "-c", "from losslesssync.stretch import native; print(native.dsp())"]) if os.path.isfile(vpy) else "?"
     print(f"lls-dsp     : {native} (sources dsp-{dsp_hash()})")
-    print(f"gpu         : {out(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader']) if shutil.which('nvidia-smi') else 'none'}")
+    print(f"gpu         : {out(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader']) if shutil.which('nvidia-smi') else 'NVIDIA, no nvidia-smi (driver?)' if nvidia_gpu() else 'none'}")
     sep = "missing"
     if os.path.isfile(spy):
         sep = out([spy, "-c", "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"])
