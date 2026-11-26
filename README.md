@@ -43,8 +43,9 @@ pieces touch get a 4 ms splice guard.
 Nothing to install by hand. `lls` (Linux) and `lls.cmd` (Windows) at the repo root
 download everything into `.lls/` inside the project, with pinned versions and checksums:
 uv, Python, the venv (`uv.lock`), a static ffmpeg with `librubberband` and `lls-dsp` (the
-native kernels, prebuilt by CI for each version of
-`dsp/`). Nothing goes outside the folder, and no system variable or `PATH` is changed, so a
+native kernels, built by CI for each version of `dsp/` and fetched from the project's Drive
+when [devcloud](https://github.com/Trick230/devcloud) is set up, otherwise built with `cargo`
+after `lls setup --dev`). Nothing goes outside the folder, and no system variable or `PATH` is changed, so a
 copied or moved folder works as it is (the venvs are rebuilt from the cache on the next
 `lls`). Windows x64 and ARM64, Linux x64 and arm64; not macOS (there is no static ffmpeg
 with `librubberband` for Apple Silicon).

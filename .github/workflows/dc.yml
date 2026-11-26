@@ -19,10 +19,11 @@ on:
       drive_in: {type: string, default: ""}
       drive_out: {type: string, default: ""}
       artifacts: {type: string, default: ""}
+      artifacts_in: {type: string, default: ""}   # artifacts of the calling run, into this folder
     secrets:
       DC_ENV: {required: false}
 jobs:
   run:
-    uses: Trick230/devcloud/.github/workflows/run.yml@f8bc116f1233e37a1fe3de0925e80a0000e32449
-    with: {commands: "${{ inputs.commands }}", os: "${{ inputs.os }}", drive_in: "${{ inputs.drive_in }}", drive_out: "${{ inputs.drive_out }}", artifacts: "${{ inputs.artifacts }}", ref: f8bc116f1233e37a1fe3de0925e80a0000e32449}
+    uses: Trick230/devcloud/.github/workflows/run.yml@f108e57ea130b7c12b14cba82fd436d96992c1a4
+    with: {commands: "${{ inputs.commands }}", os: "${{ inputs.os }}", drive_in: "${{ inputs.drive_in }}", drive_out: "${{ inputs.drive_out }}", artifacts: "${{ inputs.artifacts }}", artifacts_in: "${{ inputs.artifacts_in }}", ref: f108e57ea130b7c12b14cba82fd436d96992c1a4}
     secrets: {DC_ENV: "${{ secrets.DC_ENV }}"}

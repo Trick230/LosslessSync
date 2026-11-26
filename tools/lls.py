@@ -40,7 +40,6 @@ WIN = os.name == "nt"
 EXE = ".exe" if WIN else ""
 PY = "3.14"                     # the project's Python (uv-managed)
 SEP_PY = "3.11"                 # the stems Python (torch, audio-separator)
-REPO = "Trick230/LosslessSync"  # GitHub releases with the prebuilt lls-dsp
 MODEL = "vocals_mel_band_roformer.ckpt"
 GH = "https://github.com"
 
@@ -213,7 +212,8 @@ def setup_ffmpeg() -> None:
 # ---------------------------------------------------------------- lls-dsp
 
 def dsp_hash() -> str:
-    """Hash of the dsp/ sources (line endings normalised): names the CI release."""
+    """Hash of the dsp/ sources (line endings normalised): names the CI build (actions cache
+    key, Drive folder dsp/<hash>/)."""
     h = hashlib.sha256()
     d = os.path.join(ROOT, "dsp")
     files = ["Cargo.toml", "Cargo.lock", "build.rs", ".cargo/config.toml"]
@@ -230,6 +230,26 @@ def dsp_asset() -> str:
     return f"lls-dsp-{PLAT}{EXE}"
 
 
+def dsp_from_drive(want: str) -> bytes | None:
+    """The CI build of these dsp/ sources from the project's Drive (dsp/<hash>/<asset>), through
+    devcloud's dc when it is set up here; None otherwise (then cargo builds it)."""
+    from losslesssync import dc_launcher
+    dc = dc_launcher()
+    if not dc:
+        return None
+    tmp = os.path.join(LOCAL, "cache", f"dsp-{want}")
+    say(f"lls-dsp: fetching dsp-{want} from Drive")
+    subprocess.call([dc, "drive", "get", f"dsp/{want}/{dsp_asset()}", tmp],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    p = os.path.join(tmp, dsp_asset())
+    data = None
+    if os.path.isfile(p):
+        with open(p, "rb") as f:
+            data = f.read()
+    shutil.rmtree(tmp, ignore_errors=True)
+    return data
+
+
 def setup_dsp() -> None:
     exe, stamp, want = os.path.join(BIN, "lls-dsp" + EXE), os.path.join(BIN, "lls-dsp.hash"), dsp_hash()
     try:
@@ -238,11 +258,7 @@ def setup_dsp() -> None:
                 return
     except OSError:
         pass
-    url = f"{GH}/{REPO}/releases/download/dsp-{want}/{dsp_asset()}"
-    try:
-        data = fetch(url)
-    except urllib.error.HTTPError:
-        data = None
+    data = dsp_from_drive(want)
     for p in (exe, stamp):                   # an older binary may lack newer subcommands
         if os.path.isfile(p):
             os.remove(p)
@@ -255,7 +271,8 @@ def setup_dsp() -> None:
         with open(stamp, "w") as f:
             f.write(want)
         return
-    say(f"no prebuilt lls-dsp for these dsp/ sources (dsp-{want}; CI publishes it after a push)")
+    say(f"no prebuilt lls-dsp for these dsp/ sources (dsp-{want}; CI puts it on the project's Drive "
+        "after a push, fetched through devcloud)")
     if cargo():
         build_dsp()
     else:

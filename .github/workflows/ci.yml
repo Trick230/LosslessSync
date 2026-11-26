@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # lls-dsp for each platform, published as the release dsp-<hash of dsp/> that `lls setup`
-  # downloads; a platform whose asset is already there is not rebuilt
+  # lls-dsp for each platform, kept in the actions cache under dsp-<hash of dsp/> (a platform
+  # already there is not rebuilt) and put on the project's Drive, where `lls setup` gets it
   dsp:
     strategy:
       matrix:
@@ -27,8 +27,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     outputs:
       tag: ${{ steps.id.outputs.tag }}
-    env:
-      GH_TOKEN: ${{ github.token }}
     defaults:
       run:
         shell: pwsh
@@ -39,16 +37,18 @@ jobs:
           $tag = "dsp-$(${{ matrix.lls }} dsp-hash)"
           $asset = "$(${{ matrix.lls }} dsp-asset)"
           if ($tag -notmatch '^dsp-[0-9a-f]{12}$' -or -not $asset) { throw "lls dsp-hash failed" }
-          $names = gh release view $tag -R $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name' 2>$null
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "asset=$asset" >> $env:GITHUB_OUTPUT
-          "build=$(-not ($names -contains $asset))" >> $env:GITHUB_OUTPUT
-          exit 0   # no release yet: gh's exit code is not a failure
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: dist/
+          key: ${{ steps.id.outputs.tag }}-${{ matrix.os }}
       - name: libclang (Linux)
-        if: steps.id.outputs.build == 'True' && runner.os == 'Linux'
+        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
         run: sudo apt-get install -y -q libclang-dev
       - name: toolchain (Windows ARM)
-        if: steps.id.outputs.build == 'True' && matrix.os == 'windows-11-arm'
+        if: steps.cache.outputs.cache-hit != 'true' && matrix.os == 'windows-11-arm'
         run: |
           if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
             Invoke-WebRequest -OutFile rustup-init.exe https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
@@ -57,7 +57,7 @@ jobs:
           }
           if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) { choco install llvm -y --no-progress }
       - name: build
-        if: steps.id.outputs.build == 'True'
+        if: steps.cache.outputs.cache-hit != 'true'
         working-directory: dsp
         run: |
           if ($IsWindows) {   # static CRT: no Visual C++ redistributable needed
@@ -69,37 +69,26 @@ jobs:
           $exe = if ($IsWindows) { "lls-dsp.exe" } else { "lls-dsp" }
           New-Item -ItemType Directory -Force ../dist | Out-Null
           Copy-Item "target/release/$exe" "../dist/${{ steps.id.outputs.asset }}"
-      - if: steps.id.outputs.build == 'True'
-        uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ steps.id.outputs.asset }}
           path: dist/
 
-  release:
+  # the builds to the project's Drive (dsp/<hash>/), through devcloud (secrets: not on pull
+  # requests); rclone skips files already there
+  drive:
     needs: dsp
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      TAG: ${{ needs.dsp.outputs.tag }}
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          path: dist
-          merge-multiple: true
-      - run: |
-          ls dist 2>/dev/null | grep -q . || { echo "nothing new"; exit 0; }
-          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
-              --title "lls-dsp $TAG" --notes "Prebuilt lls-dsp for the dsp/ sources with hash ${TAG#dsp-} (lls setup downloads it)."
-          gh release upload "$TAG" dist/* -R "$GITHUB_REPOSITORY" --clobber
+    uses: ./.github/workflows/dc.yml
+    with:
+      id: ci
+      artifacts_in: dist
+      commands: '["./.devcloud/dc drive put dist dsp/${{ needs.dsp.outputs.tag }}"]'
+    secrets: {DC_ENV: "${{ secrets.DC_ENV }}"}
 
-  # on pull requests there is no release: setup falls back to building lls-dsp with cargo
+  # lls-dsp from the cache the dsp job filled, so setup neither fetches nor builds it
   test:
-    needs: [dsp, release]
-    if: always() && needs.dsp.result == 'success'
+    needs: dsp
     strategy:
       fail-fast: false
       matrix:
@@ -115,6 +104,20 @@ jobs:
         shell: pwsh
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/cache/restore@v4
+        with:
+          path: dist/
+          key: ${{ needs.dsp.outputs.tag }}-${{ matrix.os }}
+          fail-on-cache-miss: true
+      - name: lls-dsp from the cache
+        run: |
+          $asset = "$(${{ matrix.lls }} dsp-asset)"
+          $plat = $asset -replace '^lls-dsp-', '' -replace '\.exe$', ''
+          $exe = if ($IsWindows) { "lls-dsp.exe" } else { "lls-dsp" }
+          New-Item -ItemType Directory -Force ".lls/$plat/bin" | Out-Null
+          Copy-Item "dist/$asset" ".lls/$plat/bin/$exe"
+          if (-not $IsWindows) { chmod +x ".lls/$plat/bin/$exe" }
+          Set-Content -NoNewline ".lls/$plat/bin/lls-dsp.hash" "$(${{ matrix.lls }} dsp-hash)"
       - name: setup
         run: ${{ matrix.lls }} setup
       - name: lls-dsp present
@@ -142,8 +145,8 @@ jobs:
   # a real episode synced and compared with tools/regress.json; the episode comes from the
   # project's Drive through devcloud (secrets: not on pull requests) and never leaves the job
   regress:
-    needs: [dsp, release]
-    if: always() && needs.dsp.result == 'success' && github.event_name != 'pull_request'
+    needs: drive
+    if: github.event_name != 'pull_request'
     uses: ./.github/workflows/dc.yml
     with: {id: ci, commands: '["./lls setup && ./lls py tools/regress.py"]'}
     secrets: {DC_ENV: "${{ secrets.DC_ENV }}"}
