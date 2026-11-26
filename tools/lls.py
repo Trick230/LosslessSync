@@ -13,10 +13,16 @@ separation models. A moved or copied folder works again after `lls setup`.
     lls cargo ARGS                                 cargo in dsp/ (after setup --dev)
     lls gui                                        the graphical interface
     lls sync|batch|probe ...                       the losslesssync CLI
+    lls remote -- "COMMAND" ["COMMAND"...]         each command on GitHub Actions (4 CPUs,
+                                                   16 GB; devcloud's `dc run`), in parallel
 
 --stems: torch + audio-separator for --keep-engine stems (3-5 GB; NVIDIA GPU). --cloud: no
 torch, separation on a cloud GPU through devcloud (`dc gpu gpu/separate.json`). --dev: Rust
 in .lls to rebuild lls-dsp (otherwise it is the binary CI built for these exact dsp/ sources).
+
+remote: the runner checks out the pushed commit (a web session's claude/* branch is pushed
+first) and runs `./lls setup --cloud` before the command. Its logs are public: commands and
+their output must not name media.
 """
 from __future__ import annotations
 
@@ -458,6 +464,37 @@ def check() -> int:
     return 0 if os.path.isfile(vpy) and has_rubberband() else 1
 
 
+# ---------------------------------------------------------------- remote
+
+def push_branch() -> None:
+    """The runner checks out the pushed commit: a web session pushes its own claude/* branch,
+    anywhere else an unpushed commit is an error."""
+    def git(*a: str) -> str:
+        r = subprocess.run(["git", "-C", ROOT, *a], capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    branch, head = git("rev-parse", "--abbrev-ref", "HEAD"), git("rev-parse", "HEAD")
+    if head and git("rev-parse", "@{u}") == head:
+        return
+    if not (os.environ.get("CLAUDE_CODE_REMOTE") and branch.startswith("claude/")):
+        raise Fail("the runner uses the pushed commit: push first")
+    say(f"pushing {branch} (the runner uses the pushed commit)")
+    if subprocess.call(["git", "-C", ROOT, "push", "-q", "-u", "origin", branch]):
+        raise Fail(f"git push {branch} failed")
+
+
+def remote(args: list[str]) -> int:
+    from losslesssync import dc_launcher
+    cmds = args[1:] if args[:1] == ["--"] else args
+    if not cmds:
+        raise Fail('lls remote -- "COMMAND" ["COMMAND"...]')
+    dc = dc_launcher()
+    if not dc:
+        raise Fail("devcloud not found (DEVCLOUD, or ~/devcloud)")
+    push_branch()
+    return subprocess.call([dc, "run", "--each", "--", *(f"./lls setup --cloud && {c}" for c in cmds)],
+                           cwd=ROOT, stdin=subprocess.DEVNULL)
+
+
 # ---------------------------------------------------------------- run
 
 def ensure() -> None:
@@ -499,6 +536,8 @@ def main(argv: list[str]) -> int:
             return subprocess.call([exe, *rest], cwd=os.path.join(ROOT, "dsp"), env=rust_env())
         if cmd == "py":
             return python(rest)
+        if cmd == "remote":
+            return remote(rest)
         if cmd == "test":                    # tests/: LLS_CASES picks the synthetic cases
             os.environ["LLS_CASES"] = rest[0] if rest else os.environ.get("LLS_CASES", "")
             return python(["-m", "unittest", "discover", "-v", "-s", os.path.join(ROOT, "tests")])
