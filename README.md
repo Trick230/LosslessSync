@@ -257,8 +257,7 @@ on a free cloud GPU, the Google Drive folder, the `.env` tokens, CPU jobs on Git
 go through [devcloud](https://github.com/Trick230/devcloud); the project only has its GPU
 job (`gpu/separate.py` and its spec `gpu/separate.json`) and `tools/media_sync.py`, which
 syncs a whole folder or the project's Drive folder.
-CI runs the synthetic cases on every push. Workflow, rules and commands are in
-[CLAUDE.md](CLAUDE.md) (Portuguese).
+CI runs the synthetic cases on every push.
 
 ## Limitations
 
