@@ -117,7 +117,7 @@ jobs:
           New-Item -ItemType Directory -Force ".lls/$plat/bin" | Out-Null
           Copy-Item "dist/$asset" ".lls/$plat/bin/$exe"
           if (-not $IsWindows) { chmod +x ".lls/$plat/bin/$exe" }
-          Set-Content -NoNewline ".lls/$plat/bin/lls-dsp.hash" "$(${{ matrix.lls }} dsp-hash)"
+          Set-Content -Path ".lls/$plat/bin/lls-dsp.hash" -Value "$(${{ matrix.lls }} dsp-hash)" -NoNewline
       - name: setup
         run: ${{ matrix.lls }} setup
       - name: lls-dsp present
