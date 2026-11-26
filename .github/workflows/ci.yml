@@ -2,8 +2,16 @@ name: ci
 on:
   push:
     branches: [master]
+    paths-ignore: ['**.md']
   pull_request:
+    paths-ignore: ['**.md']
   workflow_dispatch:
+
+# a newer push replaces a run still in progress (the release upload is --clobber, so a
+# cancelled one is redone by the next run)
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # lls-dsp for each platform, published as the release dsp-<hash of dsp/> that `lls setup`
