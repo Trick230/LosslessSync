@@ -7,8 +7,8 @@ on:
     paths-ignore: ['**.md']
   workflow_dispatch:
 
-# a newer push replaces a run still in progress (the release upload is --clobber, so a
-# cancelled one is redone by the next run)
+# a newer push replaces a run still in progress (a cancelled one is redone by the next run:
+# the cache and the Drive upload are keyed by the dsp/ hash)
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -27,6 +27,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     outputs:
       tag: ${{ steps.id.outputs.tag }}
+      hash: ${{ steps.id.outputs.hash }}
     defaults:
       run:
         shell: pwsh
@@ -38,6 +39,7 @@ jobs:
           $asset = "$(${{ matrix.lls }} dsp-asset)"
           if ($tag -notmatch '^dsp-[0-9a-f]{12}$' -or -not $asset) { throw "lls dsp-hash failed" }
           "tag=$tag" >> $env:GITHUB_OUTPUT
+          "hash=$($tag.Substring(4))" >> $env:GITHUB_OUTPUT
           "asset=$asset" >> $env:GITHUB_OUTPUT
       - id: cache
         uses: actions/cache@v4
@@ -83,7 +85,7 @@ jobs:
     with:
       id: ci
       artifacts_in: dist
-      commands: '["./.devcloud/dc drive put dist dsp/${{ needs.dsp.outputs.tag }}"]'
+      commands: '["./.devcloud/dc drive put dist dsp/${{ needs.dsp.outputs.hash }}"]'
     secrets: {DC_ENV: "${{ secrets.DC_ENV }}"}
 
   # lls-dsp from the cache the dsp job filled, so setup neither fetches nor builds it
