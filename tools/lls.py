@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -76,7 +77,8 @@ WINLIBS = ("https://github.com/brechtsanders/winlibs_mingw/releases/download/16.
            "1f04e482797dc5f71fe2875cf2b743bfb9f5fd1de0955fdd3118438c0432ba5f")
 RUST_HOST = {"windows-x64": "x86_64-pc-windows-gnu", "windows-arm64": "aarch64-pc-windows-msvc",
              "linux-x64": "x86_64-unknown-linux-gnu", "linux-arm64": "aarch64-unknown-linux-gnu"}
-STEMS_TORCH = ("torch==2.14.1", "https://download.pytorch.org/whl/cu126")
+STEMS_TORCH = "torch==2.14.1"     # variant from torch_variant(): cu132, cu130, cu126 or cpu
+TORCH_INDEX = "https://download.pytorch.org/whl/"
 STEMS = ["audio-separator[gpu]==0.48.0", "python-stretch==0.3.1", "soundfile==0.14.0",
          "soxr==1.1.0"] + (["triton-windows==3.9.0.post30"] if WIN else [])
 STEMS_CLOUD = ["numpy", "python-stretch==0.3.1", "soundfile==0.14.0", "soxr==1.1.0"]
@@ -136,6 +138,35 @@ def nvidia_gpu() -> bool:
         except OSError:
             pass
     return False
+
+
+def torch_variant() -> tuple[str, str]:
+    """The torch wheel for this GPU, and why. CUDA 13 wheels need compute capability 7.5+
+    (Turing) and a driver for CUDA 13.x; Blackwell (12.x) needs them; older cards stay on cu126."""
+    if not shutil.which("nvidia-smi"):
+        if nvidia_gpu():
+            return "cu126", "NVIDIA GPU without nvidia-smi (driver?): the oldest CUDA wheel"
+        return "cpu", "no NVIDIA GPU: separation on the CPU (slow; lls setup --cloud uses a cloud GPU)"
+    def smi(*args: str) -> str:
+        try:
+            return subprocess.run(["nvidia-smi", *args], capture_output=True, text=True, timeout=60).stdout
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    caps = smi("--query-gpu=compute_cap", "--format=csv,noheader").split()
+    m = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", smi())
+    try:
+        cap = min(float(c) for c in caps)
+    except ValueError:
+        return "cu126", "nvidia-smi gives no compute capability: the oldest CUDA wheel"
+    cuda = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    why = f"compute capability {cap}, driver CUDA {cuda[0]}.{cuda[1]}"
+    if cap >= 7.5 and cuda >= (13, 2):
+        return "cu132", why
+    if cap >= 7.5 and cuda >= (13, 0):
+        return "cu130", why
+    if cap >= 10.0:
+        raise Fail(f"{why}: this GPU needs CUDA 13 torch; update the NVIDIA driver (580+)")
+    return "cu126", why
 
 
 def mode() -> str:
@@ -451,8 +482,10 @@ def setup_stems(cloud: bool) -> None:
     if cloud:
         uv("pip", "install", "-q", "--python", spy, *STEMS_CLOUD)
         return
-    torch, index = STEMS_TORCH
-    uv("pip", "install", "-q", "--python", spy, torch, "--index-url", index)
+    variant, why = torch_variant()
+    say(f"torch {variant} ({why})")
+    # the exact local version: a venv-sep from another variant (new GPU or driver) switches wheel
+    uv("pip", "install", "-q", "--python", spy, f"{STEMS_TORCH}+{variant}", "--index-url", TORCH_INDEX + variant)
     uv("pip", "install", "-q", "--python", spy, *STEMS)
     say("separation model")
     # gpu/separate.py --prepare fetches MODEL into DC_GPU_CACHE (else ~/.cache): here .lls/models
