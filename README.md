@@ -1,5 +1,9 @@
 # LosslessSync
 
+[![ci](https://github.com/Trick230/LosslessSync/actions/workflows/ci.yml/badge.svg)](https://github.com/Trick230/LosslessSync/actions/workflows/ci.yml)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078d4)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Syncs a dubbed audio track, such as a TV recording, onto the timeline of a reference
 release such as a Blu-ray.
 
@@ -18,6 +22,7 @@ losslessly (FLAC 24-bit) by default.
 - [Output and report](#output-and-report)
 - [Testing](#testing)
 - [Development](#development)
+- [Data and privacy](#data-and-privacy)
 - [Limitations](#limitations)
 - [License](#license)
 
@@ -262,7 +267,23 @@ on a free cloud GPU, the Google Drive folder, the `.env` tokens, CPU jobs on Git
 go through [devcloud](https://github.com/Trick230/devcloud); the project only has its GPU
 job (`gpu/separate.py` and its spec `gpu/separate.json`) and `tools/media_sync.py`, which
 syncs a whole folder or the project's Drive folder.
-CI runs the synthetic cases on every push.
+
+```
+lls remote -- "./lls test all"           # any command on GitHub Actions
+lls py tools/media_sync.py --cloud       # one Actions job per pending episode on Drive
+lls cargo build --release --features signalsmith   # rebuild lls-dsp (after lls setup --dev)
+```
+
+CI (`.github/workflows/ci.yml`) runs on every push: `lint` (ruff + mypy), `dsp` (builds
+`lls-dsp` on Windows and Linux, x64 and ARM64, and stores it on Drive), `test` (the synthetic
+cases on the same four platforms) and `regress` (a real-episode regression check).
+
+## Data and privacy
+
+- No audio, video or other copyrighted material is ever committed: real episodes stay on the
+  local disk or in the project's Drive folder, and cloud jobs move them only through Drive.
+- `.env` (tokens and local paths) is never committed; devcloud stores it encrypted.
+- Test material is synthetic (`tools/make_synth.py`), generated on demand.
 
 ## Limitations
 
