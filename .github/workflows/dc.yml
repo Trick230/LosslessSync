@@ -1,7 +1,7 @@
 # devcloud (https://github.com/Trick230/devcloud): `dc run` dispatches this; pinned to one
 # devcloud commit (`dc init` again moves the pin to the current one)
 name: dc
-run-name: dc ${{ inputs.id }} ${{ inputs.commands }}
+run-name: dc ${{ inputs.id }} ${{ inputs.title || inputs.commands }}
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +11,7 @@ on:
       drive_in: {default: ""}
       drive_out: {default: ""}
       artifacts: {default: ""}
+      title: {default: ""}   # the run's short name (dc run sets it)
   workflow_call:   # the project's own workflows reuse it: `uses: ./.github/workflows/dc.yml`
     inputs:
       id: {type: string, default: ""}
@@ -24,6 +25,6 @@ on:
       DC_ENV: {required: false}
 jobs:
   run:
-    uses: Trick230/devcloud/.github/workflows/run.yml@9738a8063f6963ae4165dded0b040e8801d12b98
-    with: {commands: "${{ inputs.commands }}", os: "${{ inputs.os }}", drive_in: "${{ inputs.drive_in }}", drive_out: "${{ inputs.drive_out }}", artifacts: "${{ inputs.artifacts }}", artifacts_in: "${{ inputs.artifacts_in }}", ref: 9738a8063f6963ae4165dded0b040e8801d12b98}
+    uses: Trick230/devcloud/.github/workflows/run.yml@73a8e18e562093007c28ab7a2befc1842f762b1a
+    with: {commands: "${{ inputs.commands }}", os: "${{ inputs.os }}", drive_in: "${{ inputs.drive_in }}", drive_out: "${{ inputs.drive_out }}", artifacts: "${{ inputs.artifacts }}", artifacts_in: "${{ inputs.artifacts_in }}", ref: 73a8e18e562093007c28ab7a2befc1842f762b1a}
     secrets: {DC_ENV: "${{ secrets.DC_ENV }}"}
