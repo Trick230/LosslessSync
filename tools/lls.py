@@ -370,6 +370,29 @@ def venv_fresh() -> bool:
         return False
 
 
+def relink(old: str) -> None:
+    """uv's minor-version links in python/ (cpython-3.14 -> cpython-3.14.10, junctions on
+    Windows) hold absolute paths: point the ones into the old folder at the new one."""
+    pdir = os.path.join(LOCAL, "python")
+    if not os.path.isdir(pdir):
+        return
+    for e in os.scandir(pdir):
+        try:
+            t = os.readlink(e.path)
+        except OSError:
+            continue
+        t = t.removeprefix("\\\\?\\")
+        if os.path.normcase(t).startswith(os.path.normcase(old) + os.sep):
+            dst = LOCAL + t[len(old):]
+            if os.name == "nt":
+                os.rmdir(e.path)
+                import _winapi
+                _winapi.CreateJunction(dst, e.path)
+            else:
+                os.unlink(e.path)
+                os.symlink(dst, e.path)
+
+
 def relocate() -> None:
     """A copied or moved folder: the venvs hold absolute paths, so
     they are rebuilt (from the cache in .lls, no download)."""
@@ -384,6 +407,7 @@ def relocate() -> None:
     sep = os.path.isdir(os.path.join(LOCAL, "venv-sep"))
     if old is not None:
         say(f"folder moved ({old} -> {LOCAL}): rebuilding the venvs")
+        relink(old)
         for d in ("venv", "venv-sep", "tools"):
             shutil.rmtree(os.path.join(LOCAL, d), ignore_errors=True)
     os.makedirs(LOCAL, exist_ok=True)
