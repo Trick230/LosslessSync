@@ -43,7 +43,7 @@ cut scene, found and synced automatically.</sub>
 - **Lossless.** Keeps the source's channels and sample rate; FLAC 24-bit by default, or mux
   straight into an MKV.
 - **Original pitch, if you want it.** Can render on the new timing while keeping the
-  broadcaster's pitch, optionally with GPU source separation for the cleanest result.
+  broadcaster's pitch (Signalsmith Stretch), optionally with GPU source separation.
 - **Whole seasons.** Batch mode pairs episodes by name and writes an HTML report per episode.
 - **Self-contained.** One command sets everything up inside the project folder. Nothing is
   installed on the system.
@@ -54,6 +54,7 @@ cut scene, found and synced automatically.</sub>
 | --- | --- |
 | Synthetic PAL case with ad break and edits (CI) | median 0.03 ms, max 0.03 ms |
 | Real TV episode, resampled | median 0.01 ms, max 0.09 ms |
+| Synthetic PAL case, original pitch kept (Signalsmith) | median 0.58 ms, p95 1.15 ms |
 | Real TV episode, original pitch kept (separated stems) | p95 1.3 ms |
 
 CI runs 13 synthetic cases with known ground truth on every push, plus a real-episode
@@ -87,7 +88,7 @@ lls gui                                                        # graphical inter
 | --- | --- | --- |
 | `--speed` | `auto` | `auto`, `pal`, `1`, or an exact ratio such as `1001/960` |
 | `--pitch` | `auto` | `resample`, `tempo`, or `keep` (original pitch on the new timing) |
-| `--keep-engine` | `auto` | stretcher for `keep`: `wsola`, `rubberband`, or `stems` (GPU) |
+| `--keep-engine` | `auto` | stretcher for `keep`: `signalsmith` (the `auto` pick), `wsola`, `rubberband`, or `stems` (GPU) |
 | `--fill` | `silence` | gaps: `silence` or `ref` |
 | `--codec`, `--bitrate` | from extension | `.flac`, `.wav`, `.ac3`, `.eac3`, `.m4a`, `.mka` |
 | `--ref-track`, `--src-track` | auto | pick tracks (see `probe`) |

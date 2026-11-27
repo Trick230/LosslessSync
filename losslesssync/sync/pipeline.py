@@ -19,7 +19,7 @@ from ..app import report_html
 from ..audio import media, wavio
 from ..audio.render import render
 from ..audio.wavio import read_info
-from ..stretch import stems, wsola
+from ..stretch import signalsmith, stems, wsola
 from . import cuts, gaps, respeed, segments, speed
 from .features import ANA_SR, features, pmap
 
@@ -33,7 +33,8 @@ class Options:
     ref_langs: tuple[str, ...] = ("eng", "jpn")
     speed: str = "auto"          # auto | pal | pal24 | ntsc | 1 | <float> | <a/b>
     pitch: str = "auto"          # auto | resample | tempo | keep
-    keep_engine: str = "wsola"   # stretcher for pitch=keep: wsola | rubberband
+    keep_engine: str = "auto"    # pitch=keep: auto (signalsmith if lls-dsp has it, else
+                                 # wsola) | signalsmith | wsola | rubberband | stems
     wsola_tol_ms: float = 5.0    # WSOLA search tolerance (bounds the timing error)...
     wsola_max_ms: float = 10.0
     ext_python: str = ""          # Python with audio-separator and python-stretch (stems)
@@ -562,13 +563,16 @@ def stretch_latency(inter16, x16, step=5.0):
 
 
 def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, split=None):
-    """Stretch the source to the film timing keeping its pitch (WSOLA or Rubber Band R3) and
+    """Stretch the source to the film timing keeping its pitch (opt.keep_engine) and
     shift the pieces by the stretcher's latency, measured against the resampled source.
     Returns the stretched WAV and, with stems, the analysis copy of everything but the
     vocals in its timing (for verify), else None."""
     rest16 = None
     keep_wav = os.path.join(tmp, "keep.wav")
-    if opt.keep_engine == "stems":
+    kind = opt.keep_engine
+    if kind == "auto":
+        kind = "signalsmith" if signalsmith.available() else "wsola"
+    if kind == "stems":
         log("time-stretching source keeping its pitch (separated stems)...")
         split = split or stems.start_split(src_path, src_st, tmp, opt, log)
         n_out = int(round(wavio.read_info(split[1]).frames * k))
@@ -608,7 +612,15 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, spli
         keep16 = rest16.copy()
         keep16[:min(n16, len(v16))] += v16[:n16]
         del v16
-    elif opt.keep_engine == "wsola":
+    elif kind == "signalsmith":
+        log("time-stretching source keeping its pitch (Signalsmith Stretch)...")
+        raw_wav = os.path.join(tmp, "raw.wav")
+        media.decode_to_wav(src_path, src_st, raw_wav, src_st.channels, src_st.sample_rate)
+        engine = signalsmith.stretch(raw_wav, keep_wav, k)
+        if not opt.keep_temp:
+            os.remove(raw_wav)
+        keep16 = media.decode_mono(keep_wav, media.audio_streams(keep_wav)[0], ANA_SR)
+    elif kind == "wsola":
         log(f"time-stretching source keeping its pitch (WSOLA, +-{opt.wsola_tol_ms:g} ms, "
             f"up to +-{opt.wsola_max_ms:g} ms)...")
         raw_wav = os.path.join(tmp, "raw.wav")

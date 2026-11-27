@@ -23,7 +23,7 @@ with `librubberband` for Apple Silicon).
 
 - Optional, `lls setup --stems`: a second Python (3.11) with CUDA torch, `audio-separator`
   and `python-stretch` in `.lls/<platform>/venv-sep`, plus the separation model in
-  `.lls/models` (3-5 GB). `--keep-engine auto` then uses it. Without an NVIDIA GPU the
+  `.lls/models` (3-5 GB), for `--keep-engine stems`. Without an NVIDIA GPU the
   separation runs on the CPU (much slower), or, when configured, as a remote job on a cloud
   GPU (`gpu/separate.py`, spec in `gpu/separate.json`).
 
@@ -72,7 +72,7 @@ one finishes on the CPU.
 | `--src-track N` | auto | Source audio track (`a:N`) |
 | `--speed` | `auto` | `auto`, `pal`, `1`, or an exact ratio such as `1001/960` |
 | `--pitch` | `auto` | `auto`, `resample`, `tempo` or `keep` (cut on the resampled source, render it time-stretched so the original PAL pitch is kept on the film timing) |
-| `--keep-engine` | `auto` | stretcher for `--pitch keep` (`auto`: `stems` when `--ext-python` or `LOSSLESSSYNC_EXT_PYTHON` is set, else `wsola`): `wsola` (built in; no phase-vocoder smearing, timing error bounded by `--wsola-max-ms`) `rubberband` (R3), or `stems`: the vocals are separated (RoFormer, GPU) and stretched with WSOLA, the rest with Signalsmith Stretch, then summed; the two always add back to the source |
+| `--keep-engine` | `auto` | stretcher for `--pitch keep` (`auto`: `signalsmith` when lls-dsp has it, else `wsola`): `signalsmith` (Signalsmith Stretch on the whole mix, through lls-dsp; the least added roughness in `tools/ground_truth.py`), `wsola` (built in; no phase-vocoder smearing, timing error bounded by `--wsola-max-ms`) `rubberband` (R3), or `stems`: the vocals are separated (RoFormer, GPU) and stretched with WSOLA, the rest with Signalsmith Stretch, then summed; the two always add back to the source |
 | `--ext-python` | `$LOSSLESSSYNC_EXT_PYTHON`, else `.lls/<platform>/venv-sep`, else this Python | Python with `audio-separator` and `python-stretch`, for `stems` |
 | `--sep-model` | `vocals_mel_band_roformer.ckpt` | Vocals model for `stems` |
 | `--vocal-engine` | `wsola` | `stems`: stretcher for the vocals, `wsola` or `psola` (`lls-dsp psola`: repeats or drops whole pitch periods; lower latency, but a worse p95 sync error on the test episode) |

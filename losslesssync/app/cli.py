@@ -18,15 +18,14 @@ def cmd_probe(args):
 
 
 def make_options(args, **extra) -> Options:
-    # stems by default once a helper Python is configured (flag or environment)
+    # the helper Python for stems (flag, environment, or lls setup --stems)
     ext = args.ext_python or os.environ.get("LOSSLESSSYNC_EXT_PYTHON", "")
     if not ext and os.path.isfile(venv_python("venv-sep")):   # lls setup --stems
         ext = venv_python("venv-sep")
-    engine = args.keep_engine if args.keep_engine != "auto" else ("stems" if ext else "wsola")
     return Options(
         ref_track=args.ref_track, src_track=args.src_track,
         ref_langs=tuple(x.strip() for x in args.ref_lang.split(",") if x.strip()),
-        speed=args.speed, pitch=args.pitch, keep_engine=engine,
+        speed=args.speed, pitch=args.pitch, keep_engine=args.keep_engine,
         wsola_tol_ms=args.wsola_tol_ms, wsola_max_ms=args.wsola_max_ms,
         ext_python=ext or sys.executable, sep_model=args.sep_model,
         vocal_engine=args.vocal_engine, hpss=args.hpss, rest_block_ms=args.rest_block_ms,
@@ -65,12 +64,13 @@ def add_common(s):
                         "keep = cut on the resampled source, render it time-stretched "
                         "keeping the original (PAL) pitch")
     s.add_argument("--keep-engine", default="auto",
-                   choices=["auto", "wsola", "rubberband", "stems"],
-                   help="stretcher for --pitch keep: wsola (no phase-vocoder smearing, "
+                   choices=["auto", "signalsmith", "wsola", "rubberband", "stems"],
+                   help="stretcher for --pitch keep: signalsmith (Signalsmith Stretch on the "
+                        "whole mix, through lls-dsp), wsola (no phase-vocoder smearing, "
                         "timing error bounded by --wsola-tol-ms), rubberband (R3), or stems "
                         "(vocals separated and stretched with WSOLA, the rest with Signalsmith "
-                        "Stretch; needs the helper Python). auto (default): stems when "
-                        "a helper Python is set or set up (lls setup --stems), else wsola")
+                        "Stretch; needs the helper Python and a GPU). auto (default): "
+                        "signalsmith when lls-dsp has it, else wsola")
     s.add_argument("--ext-python",
                    help="Python with audio-separator and python-stretch, for --keep-engine "
                         "stems (default $LOSSLESSSYNC_EXT_PYTHON, else .lls/<platform>/venv-sep, else "
