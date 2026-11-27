@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 from scipy import fft as sfft
@@ -67,19 +68,33 @@ def local_ncc(C: np.ndarray, R: np.ndarray, lags: np.ndarray) -> np.ndarray:
     return out
 
 
+@lru_cache(maxsize=16)
+def _hann32(n: int) -> np.ndarray:
+    """Read-only float32 Hann window: gcc_phat runs thousands of times on equal lengths."""
+    w = np.hanning(n).astype(np.float32)
+    w.flags.writeable = False
+    return w
+
+
+@lru_cache(maxsize=16)
+def _out_of_band(n: int, sr: int, fmin: float, fmax: float) -> np.ndarray:
+    """Read-only mask of the rfft bins of an n-point FFT outside [fmin, fmax]."""
+    f = np.fft.rfftfreq(n, 1.0 / sr)
+    m = (f < fmin) | (f > fmax)
+    m.flags.writeable = False
+    return m
+
+
 def gcc_phat(a: np.ndarray, b: np.ndarray, sr: int, max_lag: float,
              fmin: float = 150.0, fmax: float = 7000.0) -> tuple[float, float]:
     """Delay d (s) such that a(t) ~ b(t - d), and a peak-to-noise confidence."""
     n = sfft.next_fast_len(len(a) + len(b), real=True)
-    wa = np.hanning(len(a)).astype(np.float32)
-    wb = np.hanning(len(b)).astype(np.float32)
-    A = sfft.rfft(a * wa, n, workers=_nw())
-    Bf = sfft.rfft(b * wb, n, workers=_nw())
+    A = sfft.rfft(a * _hann32(len(a)), n, workers=_nw())
+    Bf = sfft.rfft(b * _hann32(len(b)), n, workers=_nw())
     G = A * np.conj(Bf)
     mag = np.abs(G)
     G /= mag + 1e-9 * (mag.max() + 1e-30)
-    f = np.fft.rfftfreq(n, 1.0 / sr)
-    G[(f < fmin) | (f > fmax)] = 0
+    G[_out_of_band(n, sr, fmin, fmax)] = 0
     cc = sfft.irfft(G, n, workers=_nw())
     L = int(max_lag * sr)
     cc = np.concatenate([cc[-L:], cc[:L + 1]])
