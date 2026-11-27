@@ -8,6 +8,8 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078d4)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+[Guide](docs/GUIDE.md) · [Installation](#installation) · [Usage](#usage) · [Issues](https://github.com/Trick230/LosslessSync/issues)
+
 </div>
 
 Take a dub from a TV recording, and LosslessSync lines it up with a Blu-ray: it corrects
@@ -142,4 +144,4 @@ Mel-Band RoFormer vocals model, NumPy, SciPy and [uv](https://github.com/astral-
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+Released under the [MIT License](LICENSE).
