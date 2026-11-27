@@ -167,3 +167,12 @@ stretchers (`wsola[:tol[:frame_ms[:key=value...]]]`, `rubberband`, `signalsmith`
 excerpts are stretched and stretched back, and the round trip is compared with the
 original on a log-mel spectrogram, forgiving +-10 ms of displacement. Lower is better.
 
+
+`tools/ground_truth.py SOURCE [--engines ...] [--broadcast E1,E2,...] [--vocals VOC]` scores
+them against a real ground truth instead: excerpts of a film-timing recording are sped up
+to PAL with the pitch corrected, as a broadcaster would (by several engines), each tested
+engine slows them back down keeping the pitch, and the result is compared with the
+original itself. Besides the log-mel scores it measures tonal smearing (8192-point
+spectrum) and added roughness (30-150 Hz amplitude modulation per band); each engine's
+score on its own broadcast is left out of the summary. With `--vocals` (the separated
+vocals of SOURCE) it also scores the `stems` render.
