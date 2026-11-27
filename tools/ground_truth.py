@@ -23,7 +23,8 @@ plus rb-tempo (Rubber Band R2, as the 'tempo' mode renders) and, with --vocals (
 separated vocals of SOURCE, e.g. from gpu/separate.py), stems: the vocals' stretcher plus
 Signalsmith on the rest, each part forwarded through the broadcast engine on its own.
 --stems picks the vocals' stretcher: stems (WSOLA with the pipeline's defaults, +-5 ms up to
-+-10 ms), stems:wsola:TOL:MAX, stems:psola:MIN:MAX (whole pitch periods).
++-10 ms), stems:wsola:TOL:MAX, stems:psola:MIN:MAX (whole pitch periods); a suffix
+@ENGINE stretches the rest with ENGINE instead of Signalsmith (e.g. stems@wsola:2).
 Only differences between engines on the same material mean anything.
 """
 from __future__ import annotations
@@ -70,6 +71,7 @@ def stems(name: str, voc: str, rest: str, voc0: str, rest0: str, dst: str, k: fl
     Signalsmith rest. Each part is aligned to its own original (voc0, rest0), as the pipeline
     compensates each part's measured latency."""
     v, r = dst[:-4] + "_v.wav", dst[:-4] + "_r.wav"
+    name, _, rest_eng = name.partition("@")
     _, *spec = name.split(":")
     kind = spec[0] if spec else "wsola"
     lo, hi = (float(spec[1]), float(spec[2])) if len(spec) > 2 else \
@@ -82,7 +84,7 @@ def stems(name: str, voc: str, rest: str, voc0: str, rest0: str, dst: str, k: fl
         psola.stretch(voc, v, k, lo, hi)
     else:
         raise SystemExit(f"unknown stems variant {name}")
-    sq.run_engine("signalsmith", rest, r, k)
+    run_engine(rest_eng or "signalsmith", rest, r, k)
     _, a, _ = sq.align(sq.load(voc0), sq.load(v))
     _, b, _ = sq.align(sq.load(rest0), sq.load(r))
     n = min(len(a), len(b))               # the two stretchers round the length differently
@@ -201,7 +203,7 @@ def main():
             sc = []
             for i, (o, tv, parts) in enumerate(tvs):
                 out = os.path.join(tmp, f"out{i}.wav")
-                if eng.split(":")[0] == "stems":
+                if eng.split(":")[0].split("@")[0] == "stems":
                     stems(eng, *parts, out, K)
                 else:
                     run_engine(eng, tv, out, K)
