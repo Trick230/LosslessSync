@@ -238,28 +238,45 @@ def dsp_hash() -> str:
     return h.hexdigest()[:12]
 
 
-def dsp_asset() -> str:
-    return f"lls-dsp-{PLAT}{EXE}"
+def dsp_asset(level: str = "") -> str:
+    return f"lls-dsp-{PLAT}{'-' + level if level else ''}{EXE}"
 
 
-def dsp_from_drive(want: str) -> bytes | None:
+def dsp_from_drive(want: str, asset: str = "") -> bytes | None:
     """The CI build of these dsp/ sources from the project's Drive (dsp/<hash>/<asset>), through
     devcloud's dc when it is set up here; None otherwise (then cargo builds it)."""
     from losslesssync import dc_launcher
     dc = dc_launcher()
     if not dc:
         return None
+    asset = asset or dsp_asset()
     tmp = os.path.join(LOCAL, "cache", f"dsp-{want}")
-    say(f"lls-dsp: fetching dsp-{want} from Drive")
-    subprocess.call([dc, "drive", "get", f"dsp/{want}/{dsp_asset()}", tmp],
+    say(f"lls-dsp: fetching dsp-{want}/{asset} from Drive")
+    subprocess.call([dc, "drive", "get", f"dsp/{want}/{asset}", tmp],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    p = os.path.join(tmp, dsp_asset())
+    p = os.path.join(tmp, asset)
     data = None
     if os.path.isfile(p):
         with open(p, "rb") as f:
             data = f.read()
     shutil.rmtree(tmp, ignore_errors=True)
     return data
+
+
+def write_exe(path: str, data: bytes) -> None:
+    with open(path + ".new", "wb") as f:
+        f.write(data)
+    os.chmod(path + ".new", 0o755)
+    os.replace(path + ".new", path)
+
+
+def dsp_cpu_level(exe: str) -> str:
+    """The level `lls-dsp cpu` reports (x86-64-v3 or generic); "" if it does not run."""
+    try:
+        r = subprocess.run([exe, "cpu"], check=False, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
 
 
 def setup_dsp() -> None:
@@ -276,10 +293,16 @@ def setup_dsp() -> None:
             os.remove(p)
     if data:
         os.makedirs(BIN, exist_ok=True)
-        with open(exe + ".new", "wb") as f:
-            f.write(data)
-        os.chmod(exe + ".new", 0o755)
-        os.replace(exe + ".new", exe)
+        write_exe(exe, data)
+        level = dsp_cpu_level(exe)
+        if level == "x86-64-v3":             # x64 CI also builds for v3 (AVX2/FMA): faster stretch
+            fast = dsp_from_drive(want, dsp_asset("v3"))
+            if fast:
+                write_exe(exe + ".v3", fast)
+                if dsp_cpu_level(exe + ".v3") == level:
+                    os.replace(exe + ".v3", exe)
+                elif os.path.isfile(exe + ".v3"):
+                    os.remove(exe + ".v3")
         with open(stamp, "w") as f:
             f.write(want)
         return

@@ -630,6 +630,22 @@ fn psola_cmd(args: &[String]) {
     println!("{} {} {} {} {}", st.voiced, st.repeats, st.forced, st.err_med, st.err_max);
 }
 
+/// The x86-64 microarchitecture level this CPU runs: `lls setup` fetches the build made for
+/// it (x86-64-v3: AVX2, FMA, BMI; about 1.3x faster stretch), else the generic one.
+fn cpu_level() -> &'static str {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")
+            && is_x86_feature_detected!("bmi1") && is_x86_feature_detected!("bmi2")
+            && is_x86_feature_detected!("lzcnt") && is_x86_feature_detected!("movbe")
+            && is_x86_feature_detected!("f16c")
+        {
+            return "x86-64-v3";
+        }
+    }
+    "generic"
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -638,6 +654,7 @@ fn main() {
         #[cfg(feature = "signalsmith")]
         Some("stretch") => stretch(&args[2..]),
         Some("--version") => println!("lls-dsp {}", env!("CARGO_PKG_VERSION")),
+        Some("cpu") => println!("{}", cpu_level()),
         _ => die("usage: lls-dsp wsola ..."),
     }
 }

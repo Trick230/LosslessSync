@@ -27,9 +27,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - {os: ubuntu-latest, lls: ./lls}
+          - {os: ubuntu-latest, lls: ./lls, v3: true}
           - {os: ubuntu-24.04-arm, lls: ./lls}
-          - {os: windows-latest, lls: ./lls.cmd}
+          - {os: windows-latest, lls: ./lls.cmd, v3: true}
           - {os: windows-11-arm, lls: ./lls.cmd}
     runs-on: ${{ matrix.os }}
     outputs:
@@ -78,6 +78,14 @@ jobs:
           $exe = if ($IsWindows) { "lls-dsp.exe" } else { "lls-dsp" }
           New-Item -ItemType Directory -Force ../dist | Out-Null
           Copy-Item "target/release/$exe" "../dist/${{ steps.id.outputs.asset }}"
+          if ("${{ matrix.v3 }}" -eq "true") {   # x64: also an x86-64-v3 build (AVX2/FMA), picked by setup
+            $env:RUSTFLAGS = "$env:RUSTFLAGS -C target-cpu=x86-64-v3".Trim()
+            $env:CXXFLAGS = if ($IsWindows) { "/arch:AVX2" } else { "-march=x86-64-v3" }
+            cargo build -q --release --features signalsmith --target-dir target-v3
+            if ($LASTEXITCODE) { exit 1 }
+            $v3 = "${{ steps.id.outputs.asset }}" -replace '^(lls-dsp-[^.]+)', '$1-v3'
+            Copy-Item "target-v3/release/$exe" "../dist/$v3"
+          }
       - uses: actions/upload-artifact@v5
         with:
           name: ${{ steps.id.outputs.asset }}
