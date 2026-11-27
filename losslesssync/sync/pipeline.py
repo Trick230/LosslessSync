@@ -411,40 +411,50 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         prog("render", 0.0)
         out_wav = os.path.join(tmp, "out.wav")
         render(info, out_pieces, n_out, out_wav, fill, fade_ms=opt.fade_ms, gain=gain)
-        log("verifying result against the reference...")
-        prog("verify", 0.0)
-        out_st = media.audio_streams(out_wav)[0]
-        out16 = media.decode_mono(out_wav, out_st, ANA_SR)
-        ref_rest16 = None
-        if opt.verify_deep and rest16 is not None:
-            got = ref_sep.result() if ref_sep else None
-            if got:
-                log("  the reference's vocals were separated while the source was stretched")
-                raw, voc = got
-            else:
-                log("separating the reference's vocals for verify...")
-                raw, voc = stems.separate_vocals(ref_path, ref_st, tmp, opt, "ref_sep")
-            ref_rest16 = (media.decode_mono(raw, media.audio_streams(raw)[0], ANA_SR)
-                          - media.decode_mono(voc, media.audio_streams(voc)[0], ANA_SR))
-        elif opt.verify_deep:
-            log("  --verify-deep needs --pitch keep with --keep-engine stems: skipped")
-        report["verify"] = verify(ref16, out16, out_pieces, rest16=rest16,
-                                  ref_rest16=ref_rest16)
-        del rest16, ref_rest16
-        v = report["verify"]
-        if v.get("measured"):
-            on_rest = (f" ({v['measured_on_rest']} on the source without its vocals)"
-                       if v.get("measured_on_rest") else "")
-            log(f"  {v['measured']}/{v['windows']} windows measured{on_rest}: median "
-                f"{v['median_abs_ms']:.3f} ms, p95 {v['p95_abs_ms']:.3f} ms, "
-                f"max {v['max_abs_ms']:.3f} ms, {v['within_1ms_pct']:.1f}% within 1 ms")
-        um = unmeasured_spans(v["points"])
-        if um:
-            log(f"  not measurable (too little shared sound): {len(um)} stretch(es), "
-                f"{sum(b - a for a, b in um):.0f} s in all")
+        # the encoder runs on one core: it works while verify measures the same file
+        enc_pool = ThreadPoolExecutor(1)
+        enc = enc_pool.submit(media.encode, out_wav, out_path, codec, opt.bitrate, opt.language)
+        enc_pool.shutdown(wait=False)
+        try:
+            log("verifying result against the reference...")
+            prog("verify", 0.0)
+            out_st = media.audio_streams(out_wav)[0]
+            out16 = media.decode_mono(out_wav, out_st, ANA_SR)
+            ref_rest16 = None
+            if opt.verify_deep and rest16 is not None:
+                got = ref_sep.result() if ref_sep else None
+                if got:
+                    log("  the reference's vocals were separated while the source was stretched")
+                    raw, voc = got
+                else:
+                    log("separating the reference's vocals for verify...")
+                    raw, voc = stems.separate_vocals(ref_path, ref_st, tmp, opt, "ref_sep")
+                ref_rest16 = (media.decode_mono(raw, media.audio_streams(raw)[0], ANA_SR)
+                              - media.decode_mono(voc, media.audio_streams(voc)[0], ANA_SR))
+            elif opt.verify_deep:
+                log("  --verify-deep needs --pitch keep with --keep-engine stems: skipped")
+            report["verify"] = verify(ref16, out16, out_pieces, rest16=rest16,
+                                      ref_rest16=ref_rest16)
+            del rest16, ref_rest16
+            v = report["verify"]
+            if v.get("measured"):
+                on_rest = (f" ({v['measured_on_rest']} on the source without its vocals)"
+                           if v.get("measured_on_rest") else "")
+                log(f"  {v['measured']}/{v['windows']} windows measured{on_rest}: median "
+                    f"{v['median_abs_ms']:.3f} ms, p95 {v['p95_abs_ms']:.3f} ms, "
+                    f"max {v['max_abs_ms']:.3f} ms, {v['within_1ms_pct']:.1f}% within 1 ms")
+            um = unmeasured_spans(v["points"])
+            if um:
+                log(f"  not measurable (too little shared sound): {len(um)} stretch(es), "
+                    f"{sum(b - a for a, b in um):.0f} s in all")
+        except BaseException:
+            futures_wait([enc])     # no encoder left writing behind the error
+            if enc.exception() is None and os.path.exists(out_path):
+                os.remove(out_path)
+            raise
         log(f"encoding {codec} -> {out_path}")
         prog("encode", 0.0)
-        media.encode(out_wav, out_path, codec, opt.bitrate, opt.language)
+        enc.result()
         report["output"] = out_path
         if opt.mux:
             log(f"muxing into {opt.mux}")
