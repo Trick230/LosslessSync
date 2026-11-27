@@ -13,12 +13,18 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# read-only GITHUB_TOKEN; actions pinned to commits
+permissions:
+  contents: read
+
 jobs:
   # ruff + mypy (versions pinned in tools/lls.py, settings in pyproject.toml)
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
       - run: ./lls lint
 
   # lls-dsp for each platform, kept in the actions cache under dsp-<hash of dsp/> (a platform
@@ -39,7 +45,9 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
       - id: id
         run: |
           $tag = "dsp-$(${{ matrix.lls }} dsp-hash)"
@@ -49,7 +57,7 @@ jobs:
           "hash=$($tag.Substring(4))" >> $env:GITHUB_OUTPUT
           "asset=$asset" >> $env:GITHUB_OUTPUT
       - id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: dist/
           key: ${{ steps.id.outputs.tag }}-${{ matrix.os }}
@@ -86,7 +94,7 @@ jobs:
             $v3 = "${{ steps.id.outputs.asset }}" -replace '^(lls-dsp-[^.]+)', '$1-v3'
             Copy-Item "target-v3/release/$exe" "../dist/$v3"
           }
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: ${{ steps.id.outputs.asset }}
           path: dist/
@@ -120,8 +128,10 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/cache/restore@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: dist/
           key: ${{ needs.dsp.outputs.tag }}-${{ matrix.os }}
@@ -149,7 +159,7 @@ jobs:
         run: ${{ matrix.lls }} test all
       - name: reports
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: reports-${{ matrix.os }}
           path: |
