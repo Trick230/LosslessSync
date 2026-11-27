@@ -9,6 +9,7 @@ separation models. A moved or copied folder works again after `lls setup`.
     lls setup [--stems] [--dev] [--cloud | --pc]   install or repair (repeatable)
     lls check                                      what is there
     lls test [all | CASE,CASE...]                  unit tests + synthetic cases (default pal,tempo,drop_pal)
+    lls test --remote [all | CASE,CASE...]         the same, one GitHub Actions job per case, in parallel
     lls lint                                       ruff + mypy (pinned, fetched by uv into .lls)
     lls py SCRIPT [ARGS]                           a script with the project's Python
     lls cargo ARGS                                 cargo in dsp/ (after setup --dev)
@@ -489,6 +490,16 @@ def remote(args: list[str]) -> int:
                            cwd=ROOT, stdin=subprocess.DEVNULL)
 
 
+def test_cases(sel: str) -> list[str]:
+    """`lls test --remote`: one `./lls test CASE` per synthetic case (tests/test_synth.py's
+    selection: empty for the quick set, `all`, or a comma list)."""
+    sys.path[:0] = [os.path.join(ROOT, "tools"), os.path.join(ROOT, "tests")]
+    import run_synth  # standard library only, like this launcher
+    import test_synth
+    cases = list(run_synth.CASES) if sel == "all" else [c for c in sel.split(",") if c] or test_synth.QUICK
+    return [f"./lls test {c}" for c in cases]
+
+
 # ---------------------------------------------------------------- run
 
 def ensure() -> None:
@@ -545,6 +556,8 @@ def main(argv: list[str]) -> int:
             return python(rest)
         if cmd == "remote":
             return remote(rest)
+        if cmd == "test" and rest[:1] == ["--remote"]:
+            return remote(test_cases(rest[1] if len(rest) > 1 else ""))
         if cmd == "test":                    # tests/: LLS_CASES picks the synthetic cases
             os.environ["LLS_CASES"] = rest[0] if rest else os.environ.get("LLS_CASES", "")
             return python(["-m", "unittest", "discover", "-v", "-s", os.path.join(ROOT, "tests")])

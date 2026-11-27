@@ -236,6 +236,7 @@ into `.lls/`; settings in `pyproject.toml`); CI runs both.
 lls test                      # unit tests + quick cases: pal, tempo, drop_pal
 lls test all                  # all thirteen
 lls test pal,drop_pal         # these
+lls test --remote all         # all thirteen on GitHub Actions, one job per case
 lls lint                      # ruff + mypy
 lls py tools/run_synth.py [test_out] [--cases pal,drop_pal]
 ```
