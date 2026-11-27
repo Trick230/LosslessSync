@@ -384,7 +384,7 @@ def relink(old: str) -> None:
         t = t.removeprefix("\\\\?\\")
         if os.path.normcase(t).startswith(os.path.normcase(old) + os.sep):
             dst = LOCAL + t[len(old):]
-            if os.name == "nt":
+            if sys.platform == "win32":   # (not os.name: mypy on Linux only skips this form)
                 os.rmdir(e.path)
                 import _winapi
                 _winapi.CreateJunction(dst, e.path)
