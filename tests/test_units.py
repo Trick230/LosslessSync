@@ -16,7 +16,8 @@ from losslesssync.audio.wavio import WavWriter, read_info  # noqa: E402
 from losslesssync.sync.cuts import best_cut  # noqa: E402
 from losslesssync.sync.features import frame_positions, mel_filterbank, pool  # noqa: E402
 from losslesssync.sync.gaps import offset_runs  # noqa: E402
-from losslesssync.sync.segments import Segment  # noqa: E402
+from losslesssync.sync.segments import (  # noqa: E402
+    FLUX_BLOCK, FLUX_HOP, Segment, _flux_bands, fine_measure, flux_slice)
 from losslesssync.sync.speed import Anchor  # noqa: E402
 
 
@@ -181,6 +182,36 @@ class SegmentCore(unittest.TestCase):
         s = Segment(anchors=[Anchor(10.0, 12.0, 0.9, 2.0), Anchor(20.0, 22.0, 0.9, 2.0)])
         self.assertEqual(s.core(1.0, 4.0), (14.0, 24.0))
         self.assertAlmostEqual(s.coarse_offset(1.0), 2.0)
+
+
+class FineFlux(unittest.TestCase):
+    def test_slice_across_blocks_matches_direct(self):
+        x = np.random.default_rng(1).standard_normal((FLUX_BLOCK + 500) * FLUX_HOP + 256)
+        f0, n = FLUX_BLOCK - 300, 700
+        seg = x[f0 * FLUX_HOP:(f0 + n - 1) * FLUX_HOP + 256].astype(np.float32)
+        win, W = _flux_bands(256, 8)
+        frames = np.lib.stride_tricks.sliding_window_view(seg, 256)[::FLUX_HOP][:n]
+        B = np.log(np.abs(np.fft.rfft(frames * win, axis=1)) @ W + 1e-5).T
+        F = np.maximum(np.diff(B, axis=1), 0)
+        F = (F - F.mean(1, keepdims=True)) / (F.std(1, keepdims=True) + 1e-9)
+        np.testing.assert_allclose(flux_slice(x, f0, n), F, atol=1e-3)
+        self.assertIsNone(flux_slice(x, -1, n))
+
+    def test_flux_fallback_off_grid_offset(self):
+        # Same onsets, unrelated waveforms (no phase coherence): only the flux can measure.
+        # The true offset is off the 1 ms grid, and the guess is 4 ms off.
+        sr, D = 16000, 0.0123
+        rng = np.random.default_rng(2)
+        ref, src = np.zeros(20 * sr), np.zeros(20 * sr)
+        env = np.exp(-np.arange(800) / 120.0)
+        for t in np.sort(rng.uniform(0.5, 19.0, 60)):
+            for y, at in ((ref, t), (src, t - D)):
+                i = int(round(at * sr))
+                y[i:i + 800] += rng.standard_normal(800) * env
+        res = fine_measure(ref, src, 5.0, D + 0.004, 6.0, max_lag=0.03, phat_thr=1e9)
+        self.assertIsNotNone(res)
+        self.assertEqual(res[2], "flux")
+        self.assertAlmostEqual(res[0], D, delta=0.0005)
 
 
 class Batch(unittest.TestCase):

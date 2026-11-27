@@ -1,6 +1,8 @@
 """Segments: building, fine offsets, splitting and merging, residual drift."""
 from __future__ import annotations
 
+import threading
+import weakref
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -92,8 +94,15 @@ def fine_measure(ref16: np.ndarray, src16: np.ndarray, r0: float, off: float, le
     m = int(max_lag * sr)
     if b0 - m < 0 or b0 + L + m > len(src16):
         return None
-    Fa = onset_flux(a)
-    Fb = onset_flux(src16[b0 - m:b0 + L + m])
+    # Flux frames come from a per-signal cache on a global 1 ms grid (overlapping windows
+    # share them): each window starts on the grid frame nearest to it, and `shift` puts
+    # the measured lag back on the exact sample positions.
+    fa, fb = round(a0 / FLUX_HOP), round((b0 - m) / FLUX_HOP)
+    Fa = flux_slice(ref16, fa, (L - FLUX_N_FFT) // FLUX_HOP + 1)
+    Fb = flux_slice(src16, fb, (L + 2 * m - FLUX_N_FFT) // FLUX_HOP + 1)
+    if Fa is None or Fb is None:
+        return None
+    shift = (fa * FLUX_HOP - a0) - (fb * FLUX_HOP - (b0 - m))
     n = Fa.shape[1]
     nl = Fb.shape[1] - n + 1
     if nl < 3:
@@ -107,10 +116,56 @@ def fine_measure(ref16: np.ndarray, src16: np.ndarray, r0: float, off: float, le
         return None
     lag = j + parabolic(vals, j)
     M = (nl - 1) / 2
-    return off + (M - lag) * FLUX_HOP / sr, float(vals[j]), "flux"
+    return off + ((M - lag) * FLUX_HOP + shift) / sr, float(vals[j]), "flux"
 
 
 FLUX_HOP = 16  # samples at 16 kHz = 1 ms
+FLUX_N_FFT = 256
+FLUX_BLOCK = 8192  # frames per cached block (~8 s)
+
+# id(signal) -> (weakref to it, {block: log band energies})
+_BAND_CACHE: dict[int, tuple[weakref.ref, dict[int, np.ndarray]]] = {}
+_BAND_LOCK = threading.Lock()
+
+
+def _band_block(x: np.ndarray, blk: int) -> np.ndarray:
+    """Log band energies (bands x frames) of frames [blk * FLUX_BLOCK, ...) of x, frame f
+    starting at sample f * FLUX_HOP; computed once per signal and block."""
+    key = id(x)
+    with _BAND_LOCK:
+        ent = _BAND_CACHE.get(key)
+        if ent is None or ent[0]() is not x:
+            for k in [k for k, e in _BAND_CACHE.items() if e[0]() is None]:
+                del _BAND_CACHE[k]
+            ent = (weakref.ref(x), {})
+            _BAND_CACHE[key] = ent
+        B = ent[1].get(blk)
+    if B is None:
+        win, W = _flux_bands(FLUX_N_FFT, 8)
+        s0 = blk * FLUX_BLOCK * FLUX_HOP
+        seg = np.asarray(x[s0:s0 + (FLUX_BLOCK - 1) * FLUX_HOP + FLUX_N_FFT], np.float32)
+        n = max(0, (len(seg) - FLUX_N_FFT) // FLUX_HOP + 1)
+        frames = np.lib.stride_tricks.sliding_window_view(seg, FLUX_N_FFT)[::FLUX_HOP][:n]
+        mag = np.abs(sfft.rfft(frames * win, axis=1, workers=_nw()))
+        B = np.log(mag @ W + 1e-5).T
+        with _BAND_LOCK:
+            ent[1][blk] = B
+    return B
+
+
+def flux_slice(x: np.ndarray, f0: int, n: int) -> np.ndarray | None:
+    """Half-wave rectified log-magnitude flux in log-spaced bands, z-scored, over the n
+    frames of x from grid frame f0 (frame f at sample f * FLUX_HOP, 1 ms hop), from the
+    per-signal cache; None if they do not fit in x."""
+    if n < 2 or f0 < 0 or (f0 + n - 1) * FLUX_HOP + FLUX_N_FFT > len(x):
+        return None if n >= 2 else np.zeros((8, 0), np.float32)
+    b0, b1 = f0 // FLUX_BLOCK, (f0 + n - 1) // FLUX_BLOCK
+    B = np.concatenate([_band_block(x, b) for b in range(b0, b1 + 1)], axis=1)
+    B = B[:, f0 - b0 * FLUX_BLOCK:f0 - b0 * FLUX_BLOCK + n]
+    F = np.maximum(np.diff(B, axis=1), 0)
+    F -= F.mean(1, keepdims=True)
+    F /= F.std(1, keepdims=True) + 1e-9
+    return F.astype(np.float32)
 
 
 _FLUX_CACHE: dict = {}
@@ -126,22 +181,6 @@ def _flux_bands(n_fft: int, n_bands: int):
                       for lo, hi in zip(edges[:-1], edges[1:])], axis=1).astype(np.float32)
         _FLUX_CACHE[key] = (np.hanning(n_fft).astype(np.float32), W)
     return _FLUX_CACHE[key]
-
-
-def onset_flux(x: np.ndarray, n_fft: int = 256, n_bands: int = 8) -> np.ndarray:
-    """Half-wave rectified log-magnitude flux in log-spaced bands, 1 ms hop, z-scored."""
-    n = (len(x) - n_fft) // FLUX_HOP + 1
-    if n < 2:
-        return np.zeros((n_bands, 0), np.float32)
-    win, W = _flux_bands(n_fft, n_bands)
-    frames = np.lib.stride_tricks.sliding_window_view(np.asarray(x, np.float32),
-                                                      n_fft)[::FLUX_HOP][:n]
-    mag = np.abs(sfft.rfft(frames * win, axis=1, workers=_nw()))
-    B = np.log(mag @ W + 1e-5).T
-    F = np.maximum(np.diff(B, axis=1), 0)
-    F -= F.mean(1, keepdims=True)
-    F /= F.std(1, keepdims=True) + 1e-9
-    return F.astype(np.float32)
 
 
 def fine_segments(segs: list[Segment], ref16, src16, k: float, chunk_s: float, progress=None):
