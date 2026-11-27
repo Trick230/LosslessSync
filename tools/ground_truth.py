@@ -16,12 +16,14 @@ the best match within +-10 ms, so timing jitter alone is not counted):
         the "rough", buzzing texture a phase vocoder leaves on sustained tones
 
     python tools/ground_truth.py SOURCE [--engines wsola,rubberband,...] [--broadcast E1,E2,...]
-           [--starts 60,330,700,1000] [--len 45] [--vocals VOCALS.wav]
+           [--starts 60,330,700,1000] [--len 45] [--vocals VOCALS.wav [--stems stems,stems:psola,...]]
 
 Engines as in tools/stretch_quality.py (wsola[:tol...], rubberband, signalsmith, atempo),
 plus rb-tempo (Rubber Band R2, as the 'tempo' mode renders) and, with --vocals (the
-separated vocals of SOURCE, e.g. from gpu/separate.py), stems: WSOLA on the vocals plus
+separated vocals of SOURCE, e.g. from gpu/separate.py), stems: the vocals' stretcher plus
 Signalsmith on the rest, each part forwarded through the broadcast engine on its own.
+--stems picks the vocals' stretcher: stems (WSOLA with the pipeline's defaults, +-5 ms up to
++-10 ms), stems:wsola:TOL:MAX, stems:psola:MIN:MAX (whole pitch periods).
 Only differences between engines on the same material mean anything.
 """
 from __future__ import annotations
@@ -41,7 +43,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import stretch_quality as sq
 
 from losslesssync.audio import media
-from losslesssync.stretch import wsola
+from losslesssync.stretch import psola, wsola
 
 K = 25 / (24000 / 1001)
 SR = sq.SR
@@ -63,16 +65,28 @@ def run_engine(name: str, src: str, dst: str, k: float):
         sq.run_engine(name, src, dst, k)
 
 
-def stems(voc: str, rest: str, dst: str, k: float):
-    """The keep-pitch 'stems' render on given parts: WSOLA vocals + Signalsmith rest."""
+def stems(name: str, voc: str, rest: str, voc0: str, rest0: str, dst: str, k: float):
+    """The keep-pitch 'stems' render on given parts: the vocals' stretcher (see --stems) +
+    Signalsmith rest. Each part is aligned to its own original (voc0, rest0), as the pipeline
+    compensates each part's measured latency."""
     v, r = dst[:-4] + "_v.wav", dst[:-4] + "_r.wav"
-    wsola.stretch(voc, v, k, 2.0, 5.0)
+    _, *spec = name.split(":")
+    kind = spec[0] if spec else "wsola"
+    lo, hi = (float(spec[1]), float(spec[2])) if len(spec) > 2 else \
+        ((5.0, 10.0) if kind == "wsola" else (2.0, 10.0))     # the pipeline's defaults
+    if kind == "wsola":
+        wsola.stretch(voc, v, k, lo, hi)
+    elif kind == "psola":
+        if not psola.available():
+            raise SystemExit("stems:psola needs an lls-dsp with psola")
+        psola.stretch(voc, v, k, lo, hi)
+    else:
+        raise SystemExit(f"unknown stems variant {name}")
     sq.run_engine("signalsmith", rest, r, k)
-    a, b = sq.load(v), sq.load(r)
-    # the rest's stretch latency, measured against the vocals' (WSOLA has almost none)
-    _, b2, _ = sq.align(a + b, b)
-    n = min(len(a), len(b2))
-    write_wav(dst, (a[:n] + b2[:n]).astype(np.float32), SR)
+    _, a, _ = sq.align(sq.load(voc0), sq.load(v))
+    _, b, _ = sq.align(sq.load(rest0), sq.load(r))
+    n = min(len(a), len(b))               # the two stretchers round the length differently
+    write_wav(dst, (a[:n] + b[:n]).astype(np.float32), SR)
 
 
 # ---------------------------------------------------------------- scores
@@ -149,9 +163,11 @@ def main():
                          "the summary leaves out each engine's score on its own broadcast")
     ap.add_argument("--starts", default=",".join(str(s) for s in sq.STARTS))
     ap.add_argument("--len", type=float, default=sq.LEN)
-    ap.add_argument("--vocals", help="separated vocals of SOURCE: adds the 'stems' engine")
+    ap.add_argument("--vocals", help="separated vocals of SOURCE: adds the 'stems' engines")
+    ap.add_argument("--stems", default="stems", help="the stems variants (with --vocals)")
     a = ap.parse_args()
-    engines = [e for e in a.engines.split(",") if e] + (["stems"] if a.vocals else [])
+    engines = [e for e in a.engines.split(",") if e] + \
+        ([e for e in a.stems.split(",") if e] if a.vocals else [])
     casts = [b for b in a.broadcast.split(",") if b]
     tmp = tempfile.mkdtemp(prefix="gt_")
     origs = []
@@ -180,13 +196,13 @@ def main():
                 parts = (v[:-4] + "_tv.wav", r[:-4] + "_tv.wav")
                 run_engine(cast, v, parts[0], 1 / K)
                 run_engine(cast, r, parts[1], 1 / K)
-            tvs.append((o, tv, parts))
+            tvs.append((o, tv, parts and (*parts, v, r)))
         for eng in engines:
             sc = []
             for i, (o, tv, parts) in enumerate(tvs):
                 out = os.path.join(tmp, f"out{i}.wav")
-                if eng == "stems":
-                    stems(*parts, out, K)
+                if eng.split(":")[0] == "stems":
+                    stems(eng, *parts, out, K)
                 else:
                     run_engine(eng, tv, out, K)
                 sc.append(score(sq.load(o), sq.load(out)))
