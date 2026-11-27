@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from scipy import fft as sfft
+from scipy.signal import fftconvolve
 
 from .features import ANA_SR, _nw, pmap
 from .speed import Anchor, gcc_phat, is_confident, parabolic
@@ -107,10 +108,10 @@ def fine_measure(ref16: np.ndarray, src16: np.ndarray, r0: float, off: float, le
     nl = Fb.shape[1] - n + 1
     if nl < 3:
         return None
-    # all lags at once: a (bands x n x lags) window view of Fb, contracted with Fa
-    vals = np.einsum("bn,bnj->j", Fa,
-                     np.lib.stride_tricks.sliding_window_view(Fb, nl, axis=1)[:, :n],
-                     optimize=True) / Fa.size
+    # all lags at once, summed over bands: correlation through the FFT in float64 (a
+    # windowed einsum copied bands x n x lags floats and summed in float32)
+    vals = fftconvolve(Fb.astype(np.float64), Fa[:, ::-1].astype(np.float64),
+                       mode="valid", axes=1).sum(0) / Fa.size
     j = int(np.argmax(vals))
     if vals[j] < 0.12 or j == 0 or j == nl - 1:
         return None
