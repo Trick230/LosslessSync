@@ -408,8 +408,9 @@ def setup_stems(cloud: bool) -> None:
     uv("pip", "install", "-q", "--python", spy, torch, "--index-url", index)
     uv("pip", "install", "-q", "--python", spy, *STEMS)
     say("separation model")
-    if subprocess.call([spy, os.path.join(ROOT, "gpu", "separate.py"), "--download", MODEL, MODELS],
-                       env=run_env(), stdout=subprocess.DEVNULL):
+    # gpu/separate.py --prepare fetches MODEL into DC_GPU_CACHE (else ~/.cache): here .lls/models
+    if subprocess.call([spy, os.path.join(ROOT, "gpu", "separate.py"), "--prepare"],
+                       env={**run_env(), "DC_GPU_CACHE": MODELS}, stdout=subprocess.DEVNULL):
         raise Fail("model download failed")
 
 
