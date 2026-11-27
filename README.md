@@ -123,8 +123,15 @@ lls lint           # ruff + mypy
 | `dsp/` | native kernels in Rust (`lls-dsp`) |
 | `tools/`, `tests/` | synthetic test material, checks, tests |
 
-Tests use synthetic material only, so no copyrighted media is needed. Cloud features (remote
-jobs, cloud GPU separation) are optional and need external tooling.
+Cloud features (remote jobs, cloud GPU separation) are optional and need external tooling.
+
+## Data and privacy
+
+- Everything runs locally by default; no audio leaves the machine unless a cloud feature is
+  configured, and then only through private storage, never public logs or artifacts.
+- The repository holds no audio or video: tests generate synthetic material with known ground
+  truth (`tools/make_synth.py`).
+- Tokens and local paths live in `.env`, which is never committed.
 
 ## Limitations
 
