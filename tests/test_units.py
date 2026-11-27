@@ -16,8 +16,7 @@ from losslesssync.audio.wavio import WavWriter, read_info  # noqa: E402
 from losslesssync.sync.cuts import best_cut  # noqa: E402
 from losslesssync.sync.features import frame_positions, mel_filterbank, pool  # noqa: E402
 from losslesssync.sync.gaps import offset_runs  # noqa: E402
-from losslesssync.sync.segments import (  # noqa: E402
-    FLUX_BLOCK, FLUX_HOP, Segment, _flux_bands, fine_measure, flux_slice)
+from losslesssync.sync.segments import FLUX_BLOCK, FLUX_HOP, Segment, _flux_bands, fine_measure, flux_slice  # noqa: E402
 from losslesssync.sync.speed import Anchor  # noqa: E402
 
 

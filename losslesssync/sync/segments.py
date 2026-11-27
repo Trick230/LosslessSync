@@ -123,32 +123,37 @@ FLUX_HOP = 16  # samples at 16 kHz = 1 ms
 FLUX_N_FFT = 256
 FLUX_BLOCK = 8192  # frames per cached block (~8 s)
 
-# id(signal) -> (weakref to it, {block: log band energies})
-_BAND_CACHE: dict[int, tuple[weakref.ref, dict[int, np.ndarray]]] = {}
+# id(signal) -> (weakref to it, {block: log band energies}, {block: lock while computed})
+_BAND_CACHE: dict[int, tuple[weakref.ref, dict[int, np.ndarray], dict[int, threading.Lock]]] = {}
 _BAND_LOCK = threading.Lock()
 
 
 def _band_block(x: np.ndarray, blk: int) -> np.ndarray:
     """Log band energies (bands x frames) of frames [blk * FLUX_BLOCK, ...) of x, frame f
-    starting at sample f * FLUX_HOP; computed once per signal and block."""
+    starting at sample f * FLUX_HOP; computed once per signal and block. Pool threads
+    measure neighbouring windows, so a block being computed is waited for, not redone."""
     key = id(x)
     with _BAND_LOCK:
         ent = _BAND_CACHE.get(key)
         if ent is None or ent[0]() is not x:
             for k in [k for k, e in _BAND_CACHE.items() if e[0]() is None]:
                 del _BAND_CACHE[k]
-            ent = (weakref.ref(x), {})
+            ent = (weakref.ref(x), {}, {})
             _BAND_CACHE[key] = ent
         B = ent[1].get(blk)
-    if B is None:
-        win, W = _flux_bands(FLUX_N_FFT, 8)
-        s0 = blk * FLUX_BLOCK * FLUX_HOP
-        seg = np.asarray(x[s0:s0 + (FLUX_BLOCK - 1) * FLUX_HOP + FLUX_N_FFT], np.float32)
-        n = max(0, (len(seg) - FLUX_N_FFT) // FLUX_HOP + 1)
-        frames = np.lib.stride_tricks.sliding_window_view(seg, FLUX_N_FFT)[::FLUX_HOP][:n]
-        mag = np.abs(sfft.rfft(frames * win, axis=1, workers=_nw()))
-        B = np.log(mag @ W + 1e-5).T
-        with _BAND_LOCK:
+        if B is not None:
+            return B
+        lock = ent[2].setdefault(blk, threading.Lock())
+    with lock:
+        B = ent[1].get(blk)
+        if B is None:
+            win, W = _flux_bands(FLUX_N_FFT, 8)
+            s0 = blk * FLUX_BLOCK * FLUX_HOP
+            seg = np.asarray(x[s0:s0 + (FLUX_BLOCK - 1) * FLUX_HOP + FLUX_N_FFT], np.float32)
+            n = max(0, (len(seg) - FLUX_N_FFT) // FLUX_HOP + 1)
+            frames = np.lib.stride_tricks.sliding_window_view(seg, FLUX_N_FFT)[::FLUX_HOP][:n]
+            mag = np.abs(sfft.rfft(frames * win, axis=1, workers=_nw()))
+            B = np.log(mag @ W + 1e-5).T
             ent[1][blk] = B
     return B
 
