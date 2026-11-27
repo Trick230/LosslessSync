@@ -48,9 +48,8 @@ pieces touch get a 4 ms splice guard.
 Nothing to install by hand. `lls` (Linux) and `lls.cmd` (Windows) at the repo root
 download everything into `.lls/` inside the project, with pinned versions and checksums:
 uv, Python, the venv (`uv.lock`), a static ffmpeg with `librubberband` and `lls-dsp` (the
-native kernels, built by CI for each version of `dsp/` and fetched from the project's Drive
-when [devcloud](https://github.com/Trick230/devcloud) is set up, otherwise built with `cargo`
-after `lls setup --dev`). Nothing goes outside the folder, and no system variable or `PATH` is changed, so a
+native kernels, prebuilt by CI for each version of `dsp/` and downloaded when the optional
+cloud tooling is configured, otherwise built with `cargo` after `lls setup --dev`). Nothing goes outside the folder, and no system variable or `PATH` is changed, so a
 copied or moved folder works as it is (the venvs are rebuilt from the cache on the next
 `lls`). Windows x64 and ARM64, Linux x64 and arm64; not macOS (there is no static ffmpeg
 with `librubberband` for Apple Silicon).
@@ -58,8 +57,8 @@ with `librubberband` for Apple Silicon).
 - Optional, `lls setup --stems`: a second Python (3.11) with CUDA torch, `audio-separator`
   and `python-stretch` in `.lls/<platform>/venv-sep`, plus the separation model in
   `.lls/models` (3-5 GB). `--keep-engine auto` then uses it. Without an NVIDIA GPU the
-  separation runs on the CPU (much slower), or on a cloud GPU through
-  [devcloud](https://github.com/Trick230/devcloud) (`dc gpu gpu/separate.json`).
+  separation runs on the CPU (much slower), or, when configured, as a remote job on a cloud
+  GPU (`gpu/separate.py`, spec in `gpu/separate.json`).
 
   With Triton (installed by `--stems`) the model's repeated blocks are compiled
   (`torch.compile`): separation chunks run 2.15x faster on an RTX 4060 (2-episode batch
@@ -262,27 +261,28 @@ original on a log-mel spectrogram, forgiving +-10 ms of displacement. Lower is b
 ## Development
 
 The project runs in three places: Windows, Linux (CachyOS) and a GPU-less cloud VM.
-`lls setup` sets each one up (`lls check` shows the state). The cloud parts (stem separation
-on a free cloud GPU, the Google Drive folder, the `.env` tokens, CPU jobs on GitHub Actions)
-go through [devcloud](https://github.com/Trick230/devcloud); the project only has its GPU
-job (`gpu/separate.py` and its spec `gpu/separate.json`) and `tools/media_sync.py`, which
-syncs a whole folder or the project's Drive folder.
+`lls setup` sets each one up (`lls check` shows the state). Cloud features are optional and
+need external tooling configured on the machine: stem separation on a cloud GPU
+(`gpu/separate.py`, spec `gpu/separate.json`), remote CPU jobs on GitHub Actions, and a cloud
+storage folder for media. `tools/media_sync.py` syncs a whole local folder, or the cloud
+folder with one remote job per episode.
 
 ```
 lls remote -- "./lls test all"           # any command on GitHub Actions
-lls py tools/media_sync.py --cloud       # one Actions job per pending episode on Drive
+lls py tools/media_sync.py --cloud       # one remote job per pending episode
 lls cargo build --release --features signalsmith   # rebuild lls-dsp (after lls setup --dev)
 ```
 
 CI (`.github/workflows/ci.yml`) runs on every push: `lint` (ruff + mypy), `dsp` (builds
-`lls-dsp` on Windows and Linux, x64 and ARM64, and stores it on Drive), `test` (the synthetic
+`lls-dsp` on Windows and Linux, x64 and ARM64, and stores the binaries for download), `test` (the synthetic
 cases on the same four platforms) and `regress` (a real-episode regression check).
 
 ## Data and privacy
 
 - No audio, video or other copyrighted material is ever committed: real episodes stay on the
-  local disk or in the project's Drive folder, and cloud jobs move them only through Drive.
-- `.env` (tokens and local paths) is never committed; devcloud stores it encrypted.
+  local disk or in private cloud storage, and remote jobs move them only through that storage,
+  never through public logs or artifacts.
+- `.env` (tokens and local paths) is never committed.
 - Test material is synthetic (`tools/make_synth.py`), generated on demand.
 
 ## Limitations
