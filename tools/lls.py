@@ -149,11 +149,11 @@ def torch_variant() -> tuple[str, str]:
         return "cpu", "no NVIDIA GPU: separation on the CPU (slow; lls setup --cloud uses a cloud GPU)"
     def smi(*args: str) -> str:
         try:
-            return subprocess.run(["nvidia-smi", *args], capture_output=True, text=True, timeout=60).stdout
+            return subprocess.run(["nvidia-smi", *args], check=False, capture_output=True, text=True, timeout=60).stdout
         except (OSError, subprocess.SubprocessError):
             return ""
     caps = smi("--query-gpu=compute_cap", "--format=csv,noheader").split()
-    m = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", smi())
+    m = re.search(r"CUDA (?:UMD )?Version:\s*(\d+)\.(\d+)", smi())   # newer drivers: "CUDA UMD Version"
     try:
         cap = min(float(c) for c in caps)
     except ValueError:
