@@ -1,7 +1,7 @@
 """Compare a sync result with the synthetic ground truth.
 
 usage: python tools/check.py CASE_DIR  (expects truth.json, report.json, ideal.wav, out.flac)
-exit code 0 when cut points are within 10 ms and timing error is under 0.1 ms
+exit code 0 when cut points are within 3 ms and timing error is under 0.1 ms
 (tempo variant: time-stretching is not sample-exact, so 150 ms / median 0.5 ms / max 5 ms).
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ def main():
         rep = json.load(f)
     ok = True
     tempo = truth.get("variant") == "tempo"
-    cut_tol = 0.15 if tempo else 0.01
+    cut_tol = 0.15 if tempo else 0.003
     print(f"speed: found {rep['speed']:.7f} truth {truth['speed']:.7f}  mode {rep['stretch_mode']}")
     t_cuts = sorted({x for s in truth["segments"] for x in (s["ref_start"], s["ref_end"])})
     f_cuts = sorted({round(x, 3) for s in rep["segments"] for x in (s["ref_start"], s["ref_end"])})

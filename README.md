@@ -23,9 +23,9 @@ $ lls sync --ref episode.mkv --src tv.ts -o dub.flac
   speed x1.0427083 (1001/960), mode resample, coverage 94.3%
   #  ref start    ref end      src start    src end      offset(ms)  method
   0  0:00:00.000  0:02:30.000  0:00:07.682  0:02:31.538   -8010.467  phat
-  1  0:02:30.000  0:04:09.993  0:03:43.466  0:05:19.364  -83010.442  phat
-  2  0:04:13.993  0:06:39.999  0:05:19.364  0:07:39.389  -79010.445  phat
-  gap 0:04:09.993 - 0:04:13.993 (4.00 s, no source)
+  1  0:02:30.000  0:04:10.001  0:03:43.466  0:05:19.372  -83010.442  phat
+  2  0:04:14.001  0:06:39.999  0:05:19.372  0:07:39.389  -79010.445  phat
+  gap 0:04:10.001 - 0:04:14.001 (4.00 s, no source)
   76/76 windows measured: median 0.027 ms, p95 0.029 ms, 100.0% within 1 ms
   encoding flac -> dub.flac
 done in 18 s

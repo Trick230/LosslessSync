@@ -437,7 +437,9 @@ def _agrees(c_in: np.ndarray, c_out: np.ndarray, lv: float) -> bool:
     if len(c_in) < 3 or len(c_out) < 3:
         return False
     a, b = float(np.mean(c_in)), float(np.mean(c_out))
-    return a >= 0.5 * lv and a - b >= 0.1
+    # the other side's clear edge already pins the cut: this side only has to point the
+    # same way, and right after a splice it is often in a quiet stretch (weak coherence)
+    return a >= 0.25 * lv and a - b >= 0.1
 
 
 def _refine_coherent(segs: list[Segment], ref16, src16, ref_dur: float,
@@ -492,8 +494,10 @@ def _refine_coherent(segs: list[Segment], ref16, src16, ref_dur: float,
         lo, hi = t - search, t + search
         if lo - ctx < a.ref_start or hi + g + ctx > b.ref_end:
             return False
-        lv = min(level(a, lo - ctx, lo), level(b, hi + g, hi + g + ctx))
-        if lv < min_coh:
+        # each side is judged against its own level: right after a splice one side is
+        # often in a quiet or dialogue-only stretch, and the other side's edge still pins it
+        lva, lvb = level(a, lo - ctx, lo), level(b, hi + g, hi + g + ctx)
+        if max(lva, lvb) < min_coh:
             return False
         f0, la = _fine_coh(ref16, src16, a.offset, lo, hi, _LOC_NFFT)
         fb, lb = _fine_coh(ref16, src16, b.offset, lo + g, hi + g, _LOC_NFFT)
@@ -507,11 +511,12 @@ def _refine_coherent(segs: list[Segment], ref16, src16, ref_dur: float,
         m = int(np.argmax(PA + PB[n] - PB - 1e-6 * np.abs(tb - t)))
         # A hands over to B: A matched before the cut and not after, B the other way round
         bef, aft = (m - _GUARD - side, m - _GUARD), (m + _GUARD, m + _GUARD + side)
-        ok_a, ok_b = _clear_edge(ca(*bef), ca(*aft), lv), _clear_edge(cb(*aft), cb(*bef), lv)
+        ok_a = lva >= min_coh and _clear_edge(ca(*bef), ca(*aft), lva)
+        ok_b = lvb >= min_coh and _clear_edge(cb(*aft), cb(*bef), lvb)
         # a lossy broadcast smears its own splice over a codec frame: one clear side is
         # enough when the other does not contradict it (matched on its own side, less outside)
-        if not (ok_a and ok_b or ok_a and _agrees(cb(*aft), cb(*bef), lv)
-                or ok_b and _agrees(ca(*bef), ca(*aft), lv)):
+        if not (ok_a and ok_b or ok_a and _agrees(cb(*aft), cb(*bef), lvb)
+                or ok_b and _agrees(ca(*bef), ca(*aft), lva)):
             return False
         a.ref_end, b.ref_start = float(tb[m]), float(tb[m]) + g
         return True
