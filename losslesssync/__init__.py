@@ -7,6 +7,12 @@ import os
 import platform
 import sys
 
+# The analysis runs its FFT/numpy work on a thread pool of all cores (features.pmap); BLAS
+# calls inside those tasks would each start OpenBLAS's own spinning threads on the same
+# cores (cores x cores threads). One BLAS thread per task: a real episode 56 -> 43 s, same
+# output. Must be set before numpy is imported; an explicit setting is kept.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 __version__ = "0.1.0"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
