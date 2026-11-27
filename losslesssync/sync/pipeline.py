@@ -44,7 +44,7 @@ class Options:
     rest_block_ms: float = 0.0   # stems: Signalsmith block and interval (0: its default 120/30)
     rest_interval_ms: float = 0.0
     sep_model_dir: str = MODELS   # ...widened up to this for a clearly better splice
-    fill: str = "silence"        # silence | ref
+    fill: str = "silence"        # silence | ref | me (the reference without its vocals)
     fade_ms: float = 300.0        # fade at edges next to a gap
     fade_opening: bool = False   # also fade into the opening titles
     dropout_fade_ms: float = 10.0  # fade at the edges of a signal dropout
@@ -398,10 +398,15 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
         out_pieces = pieces + extra_pieces(src_path, src_st, k, extra, mode, opt, tmp, info, log)
         out_pieces.sort(key=lambda p: p["start"])
         fill = None
-        if opt.fill == "ref":
+        if opt.fill in ("ref", "me"):
             fill_wav = os.path.join(tmp, "fill.wav")
             media.decode_to_wav(ref_path, ref_st, fill_wav, info.channels, info.sr)
-            fill = read_info(fill_wav)
+            if opt.fill == "me" and not stems.remove_vocals(
+                    fill_wav, fill_regions(out_pieces, n_out, info.sr, opt.fade_ms), tmp, opt, log):
+                log("  --fill me: no gaps, or more than 2 channels (cannot separate): "
+                    "gaps left silent")
+                fill_wav = None
+            fill = read_info(fill_wav) if fill_wav else None
         log("rendering...")
         prog("render", 0.0)
         out_wav = os.path.join(tmp, "out.wav")
@@ -560,6 +565,30 @@ def stretch_latency(inter16, x16, step=5.0):
         raise media.MediaError("could not measure the time-stretch latency")
     t, off = (np.array(x) for x in zip(*ok))
     return float(np.median(off)), t, off
+
+
+def fill_regions(pieces: list[dict], n_out: int, sr: int, fade_ms: float,
+                 margin_s: float = 2.0) -> list[tuple[int, int]]:
+    """Frame ranges of the output not covered by pieces (the gaps a fill shows through),
+    widened by the fades into them and a margin for the separation's context, merged."""
+    pad = int(round((fade_ms * 1e-3 + margin_s) * sr))
+    out: list[tuple[int, int]] = []
+    cur = 0
+    for p in sorted(pieces, key=lambda q: q["start"]):
+        n0 = min(max(int(round(p["start"] * sr)), cur), n_out)
+        if n0 > cur:
+            out.append((cur, n0))
+        cur = max(cur, min(int(round(p["end"] * sr)), n_out))
+    if cur < n_out:
+        out.append((cur, n_out))
+    merged: list[tuple[int, int]] = []
+    for a, b in out:
+        a, b = max(0, a - pad), min(n_out, b + pad)
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
 
 
 def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, split=None):

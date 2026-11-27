@@ -89,7 +89,7 @@ lls gui                                                        # graphical inter
 | `--speed` | `auto` | `auto`, `pal`, `1`, or an exact ratio such as `1001/960` |
 | `--pitch` | `auto` | `resample`, `tempo`, or `keep` (original pitch on the new timing) |
 | `--keep-engine` | `auto` | stretcher for `keep`: `signalsmith` (the `auto` pick), `wsola`, `rubberband`, or `stems` (GPU) |
-| `--fill` | `silence` | gaps: `silence` or `ref` |
+| `--fill` | `silence` | gaps: `silence`, `ref`, or `me` (the reference without its vocals) |
 | `--codec`, `--bitrate` | from extension | `.flac`, `.wav`, `.ac3`, `.eac3`, `.m4a`, `.mka` |
 | `--ref-track`, `--src-track` | auto | pick tracks (see `probe`) |
 

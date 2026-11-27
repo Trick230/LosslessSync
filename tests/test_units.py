@@ -102,6 +102,14 @@ class Render(unittest.TestCase):
             np.testing.assert_allclose(m[s - h:s + h], x[s - h:s + h] * (1 - up)
                                        + x[s - h + 800:s + h + 800] * up, atol=1e-5)
             del m
+            # a gap filled with the same signal: the pieces' fades cross-fade into the fill,
+            # so the source comes back exactly
+            pieces = [{"start": 0.0, "end": 0.4, "offset": 0.0},
+                      {"start": 0.6, "end": 1.0, "offset": 0.0}]
+            render(read_info(src), pieces, n, out, fill=read_info(src), fade_ms=50.0)
+            m = read_info(out).memmap()
+            np.testing.assert_allclose(m, x, atol=1e-6)
+            del m
 
 
 class BestCut(unittest.TestCase):

@@ -14,9 +14,11 @@ def _fade(n: int, rising: bool) -> np.ndarray:
 
 
 def _copy(w: WavWriter, src: np.ndarray, a: int, n: int, fade_in: int, fade_out: int,
-          gain: float = 1.0):
+          gain: float = 1.0, under_in: np.ndarray | None = None,
+          under_out: np.ndarray | None = None, at: int = 0):
     """Write n frames of src starting at frame a (zeros outside src) with edge fades,
-    scaled by gain."""
+    scaled by gain. under_in / under_out (indexed by output frame, the first written being
+    at) rise under the fade in / fade out with the complementary ramp: a cross-fade."""
     pos = 0
     while pos < n:
         m = min(BLOCK, n - pos)
@@ -29,11 +31,17 @@ def _copy(w: WavWriter, src: np.ndarray, a: int, n: int, fade_in: int, fade_out:
                 blk[s0 - lo:s1 - lo] *= np.float32(gain)
         if fade_in and pos < fade_in:
             k = min(fade_in - pos, m)
-            blk[:k] *= _fade(fade_in, True)[pos:pos + k]
+            r = _fade(fade_in, True)[pos:pos + k]
+            blk[:k] *= r
+            if under_in is not None:
+                blk[:k] += _read(under_in, at + pos, k) * (1 - r)
         if fade_out and pos + m > n - fade_out:
             start = max(pos, n - fade_out)
             ramp = _fade(fade_out, False)[start - (n - fade_out):]
-            blk[start - pos:] *= ramp[:m - (start - pos)]
+            ramp = ramp[:m - (start - pos)]
+            blk[start - pos:] *= ramp
+            if under_out is not None:
+                blk[start - pos:] += _read(under_out, at + start, m - (start - pos)) * (1 - ramp)
         w.write(blk)
         pos += m
 
@@ -45,7 +53,8 @@ def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
     read from inter, or from their own 'src' (a WavInfo of the same layout) when they have one.
     The source is scaled by gain (the reference fill is not).
 
-    Edges next to a gap fade over fade_ms (inside the piece, so no extra source is used).
+    Edges next to a gap fade over fade_ms (inside the piece, so no extra source is used);
+    with a fill, the fill rises under that fade (a cross-fade) and is not faded itself.
     Pieces that butt against each other cross-fade over splice_ms centred on the splice, each
     read splice_ms / 2 past its edge, so continuous sound does not dip to silence there;
     a piece too short for that gets a splice_ms fade to silence instead."""
@@ -72,7 +81,7 @@ def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
     for k, p in enumerate(pieces):
         n0, n1 = spans[k]
         if n0 > cur:
-            _gap(w, ref, cur, n0 - cur, S, n_out)
+            _gap(w, ref, cur, n0 - cur)
         n = n1 - n0
         if n > 0:
             nxt = spans[k + 1][0] if k + 1 < len(spans) else n_out
@@ -84,13 +93,15 @@ def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
             a, b = n0 + (H if bi else 0), n1 - (H if bo else 0)
             fi, fo = (0 if bi else fi), (0 if bo else fo)
             arr, shift = _source(p, src, sr)
-            _copy(w, arr, a - shift, b - a, min(fi, (b - a) // 2), min(fo, (b - a) // 2), gain)
+            _copy(w, arr, a - shift, b - a, min(fi, (b - a) // 2), min(fo, (b - a) // 2), gain,
+                  under_in=ref if n0 > cur else None,
+                  under_out=ref if nxt > n1 and fo else None, at=a)
             if bo:
                 arr2, shift2 = _source(pieces[k + 1], src, sr)
                 _xfade(w, arr, b - shift, arr2, b - shift2, 2 * H, gain)
         cur = n1
     if cur < n_out:
-        _gap(w, ref, cur, n_out - cur, S, n_out)
+        _gap(w, ref, cur, n_out - cur)
     w.close()
 
 
@@ -117,8 +128,8 @@ def _xfade(w: WavWriter, a_src: np.ndarray, a: int, b_src: np.ndarray, b: int, n
     w.write(blk)
 
 
-def _gap(w: WavWriter, ref, start: int, n: int, F: int, n_out: int):
+def _gap(w: WavWriter, ref, start: int, n: int):
     if ref is None:
         w.write_silence(n)
     else:
-        _copy(w, ref, start, n, F if start > 0 else 0, F if start + n < n_out else 0)
+        _copy(w, ref, start, n, 0, 0)       # the pieces' fades cross-fade into it

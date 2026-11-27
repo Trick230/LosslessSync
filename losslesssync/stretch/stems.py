@@ -112,6 +112,44 @@ def separate_vocals(path, st, tmp, opt, name: str, started=None) -> tuple[str, s
     return raw, voc
 
 
+def remove_vocals(fill_wav: str, regions: list[tuple[int, int]], tmp: str, opt, log) -> bool:
+    """--fill me: subtracts the vocals from fill_wav (in place) over regions, frame ranges
+    that hold every gap and the fades into it. Only those stretches are separated: one
+    short job, however long the track. False (fill_wav untouched) when the layout cannot be
+    separated."""
+    info = read_info(fill_wav)
+    if info.channels > 2 or not regions:
+        return False
+    total = sum(b - a for a, b in regions)
+    log(f"separating the reference's vocals around the gaps ({total / info.sr:.0f} s)...")
+    raw, voc = os.path.join(tmp, "fill_raw.wav"), os.path.join(tmp, "fill_vocals.wav")
+    x = np.memmap(fill_wav, dtype="<f4", mode="r+", offset=info.offset,
+                  shape=(info.frames, info.channels))
+    w = WavWriter(raw, total, info.channels, info.sr, info.mask)
+    for a, b in regions:
+        w.write(x[a:b])
+    w.close()
+    job = Helper(opt, tmp, "fill_sep", "separate", raw, voc, "-", opt.sep_model,
+                 opt.sep_model_dir)
+    try:
+        job.expect("vocals")
+        job.wait()
+    except BaseException:
+        job.kill()
+        raise
+    v = read_info(voc).memmap()
+    pos = 0
+    for a, b in regions:
+        x[a:b] -= v[pos:pos + b - a]
+        pos += b - a
+    x.flush()
+    del x, v
+    if not opt.keep_temp:
+        os.remove(raw)
+        os.remove(voc)
+    return True
+
+
 class RefSeparation:
     """--verify-deep: the reference's vocals, separated as soon as the source's separation
     frees the GPU (while the source is stretched on the CPU), so only one separation uses

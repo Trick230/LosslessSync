@@ -73,7 +73,7 @@ class App(tk.Tk):
         self.fade = tk.StringVar(value="300")
         items = [("Velocidade", self.speed, ["auto", "pal", "pal24", "ntsc", "1", "1001/960"], False),
                  ("Pitch", self.pitch, ["auto", "resample", "tempo", "keep"], True),
-                 ("Partes em falta", self.fill, ["silence", "ref"], True),
+                 ("Partes em falta", self.fill, ["silence", "ref", "me"], True),
                  ("Codec", self.codec, ["auto"] + list(media.CODECS), True)]
         for c, (label, v, vals, ro) in enumerate(items):
             ttk.Label(opts, text=label).grid(row=0, column=2 * c, sticky="e", **pad)

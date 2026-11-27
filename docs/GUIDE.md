@@ -83,7 +83,7 @@ one finishes on the CPU.
 | `--wsola-max-ms` | `10` | WSOLA widens its search up to this only for a clearly better splice (fewer artefacts; set it equal to `--wsola-tol-ms` for a hard bound) |
 | `--no-match-loudness` | off | Keep the source's level. By default one constant gain gives the synced track the reference's integrated loudness (EBU R128, measured over the synced parts only); no compression or limiting, and capped so the peaks stay below -0.1 dBFS (-1 dBFS for lossy codecs) |
 | `--verify-deep` | off | `stems`: also separate the reference's vocals, so the check after rendering can measure windows where both dialogues hide the shared sound (S01E01: 184 instead of 171 of 251 windows); about a minute more on the GPU |
-| `--fill` | `silence` | What fills gaps: `silence` or `ref` |
+| `--fill` | `silence` | What fills gaps: `silence`, `ref` (the reference), or `me` (the reference with its vocals separated out around the gaps; needs the separation model, falls back to silence). The fill cross-fades under the pieces' edge fades |
 | `--fade-ms` | `300` | Fade at the edges of gaps |
 | `--fade-opening` | off | Also fade into the opening titles |
 | `--codec` | from extension | Override the output codec |

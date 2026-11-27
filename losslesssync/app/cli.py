@@ -95,8 +95,12 @@ def add_common(s):
                    help="WSOLA may widen its search up to this (ms) when that gives a "
                         "clearly better splice (default 10; set equal to --wsola-tol-ms "
                         "for a hard bound)")
-    s.add_argument("--fill", default="silence", choices=["silence", "ref"],
-                   help="what to put where the source has no matching content")
+    s.add_argument("--fill", default="silence", choices=["silence", "ref", "me"],
+                   help="what to put where the source has no matching content: silence, "
+                        "ref (the reference as it is, dialogue included) or me (the "
+                        "reference without its vocals: music and effects; separates only "
+                        "around the gaps, needs the helper Python or a cloud GPU); the "
+                        "track's fades cross-fade into the fill")
     s.add_argument("--fade-ms", type=float, default=300.0,
                    help="fade length (ms) where the track meets a gap (default 300)")
     s.add_argument("--fade-opening", action="store_true",
