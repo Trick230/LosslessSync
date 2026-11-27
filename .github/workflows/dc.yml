@@ -25,6 +25,6 @@ on:
       DC_ENV: {required: false}
 jobs:
   run:
-    uses: Trick230/devcloud/.github/workflows/run.yml@73a8e18e562093007c28ab7a2befc1842f762b1a
-    with: {commands: "${{ inputs.commands }}", os: "${{ inputs.os }}", drive_in: "${{ inputs.drive_in }}", drive_out: "${{ inputs.drive_out }}", artifacts: "${{ inputs.artifacts }}", artifacts_in: "${{ inputs.artifacts_in }}", ref: 73a8e18e562093007c28ab7a2befc1842f762b1a}
+    uses: Trick230/devcloud/.github/workflows/run.yml@302fff651cc782d18f9bb07b3c430d512e967a28
+    with: {commands: "${{ inputs.commands }}", os: "${{ inputs.os }}", drive_in: "${{ inputs.drive_in }}", drive_out: "${{ inputs.drive_out }}", artifacts: "${{ inputs.artifacts }}", artifacts_in: "${{ inputs.artifacts_in }}", ref: 302fff651cc782d18f9bb07b3c430d512e967a28}
     secrets: {DC_ENV: "${{ secrets.DC_ENV }}"}
