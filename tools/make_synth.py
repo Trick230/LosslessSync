@@ -121,6 +121,8 @@ def main():
     ap.add_argument("--recap", action="store_true")
     ap.add_argument("--intro", action="store_true")
     ap.add_argument("--credits", action="store_true")
+    ap.add_argument("--wrong", action="store_true",
+                    help="the TV file is another episode that shares only the opening titles")
     ap.add_argument("--channels", type=int, default=2, choices=[1, 2, 6])
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -189,6 +191,11 @@ def main():
 
     r2 = np.random.default_rng(a.seed + 300)
     junk = lambda d: np.stack([note_track(r2, d, 2) + effects_track(r2, d, 2)] * 2, 1) * 0.8
+    if a.wrong:
+        # another episode: only the first 30 s (opening titles) are shared
+        n0 = int(30 * SR)
+        other = junk((len(prog_tv) - n0) / SR + 1)
+        prog_tv[n0:] = other[:len(prog_tv) - n0]
     parts, segments = [], []
     if a.recap:
         for s, e in ((300.0, 310.0), (210.0, 220.0)):

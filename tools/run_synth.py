@@ -5,8 +5,9 @@ usage: python tools/run_synth.py [OUT_ROOT] [--cases pal,tempo,none,drop_pal,...
 Cases: pal, tempo, none (the TV speed-up), drop_<variant> (with TV signal dropouts), ad,
 recap, intro, credits, credits_tempo (an ad break, a recap at the start, a different intro,
 sped-up credits, also on a time-stretched source), mono and surround
-(TV layouts). Each runs make_synth.py, `losslesssync sync` and check.py; exit code 0 when
-every case passes.
+(TV layouts), wrong (another episode sharing the opening titles: must be refused).
+Each runs make_synth.py, `losslesssync sync` and check.py; exit code 0 when every case
+passes.
 """
 from __future__ import annotations
 
@@ -28,7 +29,10 @@ CASES = {
     "credits_tempo": ["--variant", "tempo", "--credits"],
     "mono": ["--variant", "pal", "--channels", "1"],
     "surround": ["--variant", "none", "--channels", "6"],
+    "wrong": ["--variant", "pal", "--wrong"],
 }
+# cases the sync must refuse, with this in its log
+REFUSE = {"wrong": "wrong file"}
 
 
 def run_case(out_root: str, case: str) -> bool:
@@ -42,6 +46,11 @@ def run_case(out_root: str, case: str) -> bool:
                             "--src", os.path.join(d, "tv.ts"), "-o", os.path.join(d, "out.flac"),
                             "--report", os.path.join(d, "report.json")],
                            stdout=f, stderr=subprocess.STDOUT, env=env, check=False)
+    if case in REFUSE:
+        with open(log, encoding="utf-8") as f:
+            ok = r.returncode != 0 and REFUSE[case] in f.read()
+        print(f"{case}: {'PASS (refused)' if ok else 'FAIL (not refused), see ' + log}")
+        return ok
     if r.returncode:
         print(f"{case}: sync failed, see {log}")
         return False
