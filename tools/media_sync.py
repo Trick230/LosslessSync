@@ -13,8 +13,9 @@ synced/; episodes with their report in synced/<episode>/ are skipped. Each pendi
 becomes a GitHub Actions job of its own (`lls remote`, all in parallel); --here syncs them
 on this machine instead, one at a time: copy its two files to .lls/media-cache, sync,
 upload the flac/json/html/log to synced/<episode>/, delete that episode's cache. --redo
-syncs done episodes again. --only picks episodes by ID (a hash of the episode key: Actions logs are public, so a runner never prints names and batch's own output
-goes only into the uploaded log). dc is found through DEVCLOUD (environment or .env), else
+syncs done episodes again. --only picks episodes by ID (a hash of the episode key: Actions
+logs are public, so a runner never prints names and batch's own output goes only into the
+uploaded log). dc is found through DEVCLOUD (environment or .env), else
 .devcloud/ (Actions) or ~/devcloud.
 
 BATCH_OPTIONS go to `losslesssync batch` as they are (e.g. --pitch keep --verify-deep).
