@@ -80,12 +80,20 @@ def features(x: np.ndarray, sr: int = ANA_SR, hop_s: float = 0.01, speed: float 
              n_fft: int = 1024, n_mels: int = 32, fmin: float = 80.0, fmax: float = 7000.0,
              hp_s: float = 1.0, positions: np.ndarray | None = None,
              floor_ref: float | None = None) -> np.ndarray:
+    e = feature_energies(x, sr, hop_s, speed, n_fft, n_mels, fmin, fmax, positions)
+    return postprocess(e, hop_s, hp_s, floor_ref)
+
+
+def feature_energies(x: np.ndarray, sr: int = ANA_SR, hop_s: float = 0.01, speed: float = 1.0,
+                     n_fft: int = 1024, n_mels: int = 32, fmin: float = 80.0,
+                     fmax: float = 7000.0, positions: np.ndarray | None = None) -> np.ndarray:
+    """The mel energies under features(): postprocess() them for any hp_s, so one signal
+    needs them computed only once."""
     hop = sr * hop_s
     if positions is None:
         positions = frame_positions(len(x), hop, speed)
     fb = mel_filterbank(sr, n_fft, n_mels, fmin, fmax)
-    e = mel_energies(x, positions, n_fft, fb)
-    return postprocess(e, hop_s, hp_s, floor_ref)
+    return mel_energies(x, positions, n_fft, fb)
 
 
 def postprocess(e: np.ndarray, hop_s: float, hp_s: float, floor_ref: float | None = None):

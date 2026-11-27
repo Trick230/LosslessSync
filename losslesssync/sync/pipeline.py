@@ -21,7 +21,7 @@ from ..audio.render import render
 from ..audio.wavio import read_info
 from ..stretch import signalsmith, stems, wsola
 from . import cuts, gaps, respeed, segments, speed
-from .features import ANA_SR, features, pmap
+from .features import ANA_SR, feature_energies, features, pmap, postprocess
 
 SPEED_ALIASES = {"pal": 1001 / 960, "pal24": 25 / 24, "ntsc": 960 / 1001, "1": 1.0, "none": 1.0}
 
@@ -215,11 +215,14 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
           split=None, ref_sep=None):
     log("decoding analysis audio (mono 16 kHz)...")
     prog("decode", 0.0)
-    ref16 = media.decode_mono(ref_path, ref_st, ANA_SR)
-    src16 = media.decode_mono(src_path, src_st, ANA_SR)
+    with ThreadPoolExecutor(1) as dec:     # two ffmpeg processes at once (exit waits)
+        src_job = dec.submit(media.decode_mono, src_path, src_st, ANA_SR)
+        ref16 = media.decode_mono(ref_path, ref_st, ANA_SR)
+        src16 = src_job.result()
     ref_dur = len(ref16) / ANA_SR
     log(f"  ref {fmt_t(ref_dur)}  src {fmt_t(len(src16) / ANA_SR)}")
-    R = features(ref16)
+    ref_e = feature_energies(ref16)        # R and, for the cut points, Rb
+    R = postprocess(ref_e, 0.01, 1.0)
 
     forced = parse_speed(opt.speed)
     if forced is None:
@@ -304,7 +307,8 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
     segs = segments.merge_equal(segs, k, opt.chunk_s)
 
     log("placing cut points...")
-    Rb = features(ref16, hp_s=0.15)
+    Rb = postprocess(ref_e, 0.01, 0.15)
+    del ref_e
     Sb = features(inter16, hp_s=0.15)
     segs = gaps.split_on_dropouts(segs, ref16, inter16, Rb, Sb, k, opt.chunk_s, ref_dur,
                                   progress=lambda f: prog("dropouts", f))
