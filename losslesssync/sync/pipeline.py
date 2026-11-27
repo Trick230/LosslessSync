@@ -528,12 +528,18 @@ def match_loudness(ref_loud, inter_wav: str, info, pieces, extra, codec: str, lo
     multiplier for the whole track: no compression or limiting, so the dynamics and the
     sound stay the original's. Capped so it cannot push peaks into clipping."""
     try:
+        # the source is measured while the reference's measure (a pool job) still runs
+        try:
+            src_loud = media.loudness(inter_wav, media.audio_streams(inter_wav)[0],
+                                      [(p["start"] - p["offset"], p["end"] - p["offset"])
+                                       for p in pieces]
+                                      + [(x["src_start"], x["src_start"]
+                                          + (x["ref_end"] - x["ref_start"]) / x["speed"])
+                                         for x in extra])
+        except BaseException:
+            futures_wait([ref_loud])  # do not leave its ffmpeg running behind the error
+            raise
         ref_loud = ref_loud.result()
-        src_loud = media.loudness(inter_wav, media.audio_streams(inter_wav)[0],
-                                  [(p["start"] - p["offset"], p["end"] - p["offset"])
-                                   for p in pieces]
-                                  + [(x["src_start"], x["src_start"] + (x["ref_end"] - x["ref_start"])
-                                      / x["speed"]) for x in extra])
     except media.MediaError as e:
         log(f"  loudness: {str(e).splitlines()[0][:200]}")
         ref_loud = src_loud = None
