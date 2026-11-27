@@ -346,6 +346,14 @@ def separate(src: str, voc_out: str, rest_k_out: str, model: str, model_dir: str
 
     # fp16 autocast: 1.9x faster on an RTX 4060, 66 dB from the fp32 stem (inaudible)
     tmp = tempfile.mkdtemp(dir=os.path.dirname(os.path.abspath(voc_out)))  # fallback's stem
+    # onnxruntime-gpu finds the CUDA libraries of torch's nvidia-* wheels (else ONNX models run
+    # on the CPU and audio-separator's provider check warns "Failed to load libcurand")
+    try:
+        import onnxruntime
+        if hasattr(onnxruntime, "preload_dlls"):
+            onnxruntime.preload_dlls()
+    except (ImportError, OSError):
+        pass
     sep = Separator(output_dir=tmp, output_format="WAV",
                     model_file_dir=model_dir, log_level=logging.WARNING,
                     output_single_stem="Vocals", use_autocast=True,

@@ -2,7 +2,7 @@
   "name": "lls-sep",
   "script": "separate.py",
   "files": ["../losslesssync/stretch/ext.py"],
-  "pip": ["torch", "audio-separator[gpu]", "soundfile", "soxr", "numpy", "scipy"],
+  "pip": ["torch", "audio-separator[gpu]", "onnxruntime-gpu[cuda,cudnn]", "soundfile", "soxr", "numpy", "scipy"],
   "apt": ["build-essential", "ffmpeg"],
   "prepare": true,
   "gpu": "T4",

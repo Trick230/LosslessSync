@@ -45,5 +45,5 @@ exclude = ["^\\.lls/", "^test_out/", "^temp/"]
 
 # third-party modules without types (or only in the stems Python): a broken import of our own still fails
 [[tool.mypy.overrides]]
-module = ["scipy.*", "soundfile", "soxr", "torch", "audio_separator.*", "python_stretch"]
+module = ["scipy.*", "soundfile", "soxr", "torch", "audio_separator.*", "onnxruntime", "python_stretch"]
 ignore_missing_imports = true
