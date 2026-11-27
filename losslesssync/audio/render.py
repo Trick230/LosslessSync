@@ -45,8 +45,10 @@ def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
     read from inter, or from their own 'src' (a WavInfo of the same layout) when they have one.
     The source is scaled by gain (the reference fill is not).
 
-    Edges next to a gap fade over fade_ms (inside the piece, so no extra source is used);
-    pieces that butt against each other only get a splice_ms click guard."""
+    Edges next to a gap fade over fade_ms (inside the piece, so no extra source is used).
+    Pieces that butt against each other cross-fade over splice_ms centred on the splice, each
+    read splice_ms / 2 past its edge, so continuous sound does not dip to silence there;
+    a piece too short for that gets a splice_ms fade to silence instead."""
     sr = inter.sr
     src = inter.memmap()
     ref = fill.memmap() if fill is not None else None
@@ -54,27 +56,65 @@ def render(inter: WavInfo, pieces: list[dict], n_out: int, out_wav: str,
         return max(1, int(round(v * 1e-3 * sr)))
 
     F, S = ms(fade_ms), ms(splice_ms)
-    w = WavWriter(out_wav, n_out, inter.channels, sr, inter.mask)
-    cur = 0
-    for k, p in enumerate(pieces):
+    H = S // 2
+    spans, cur = [], 0
+    for p in pieces:
         n0 = min(max(int(round(p["start"] * sr)), cur), n_out)
         n1 = min(max(int(round(p["end"] * sr)), n0), n_out)
+        spans.append((n0, n1))
+        cur = n1
+    # butt[k]: piece k cross-fades into piece k + 1
+    butt = [H > 0 and k + 1 < len(spans) and spans[k][1] == spans[k + 1][0] < n_out
+            and spans[k][1] - spans[k][0] >= 2 * S and spans[k + 1][1] - spans[k + 1][0] >= 2 * S
+            for k in range(len(spans))]
+    w = WavWriter(out_wav, n_out, inter.channels, sr, inter.mask)
+    cur = 0          # end of the last piece
+    for k, p in enumerate(pieces):
+        n0, n1 = spans[k]
         if n0 > cur:
             _gap(w, ref, cur, n0 - cur, S, n_out)
-        shift = int(round(p["offset"] * sr))
         n = n1 - n0
         if n > 0:
-            nxt = int(round(pieces[k + 1]["start"] * sr)) if k + 1 < len(pieces) else n_out
+            nxt = spans[k + 1][0] if k + 1 < len(spans) else n_out
             Fi = ms(p["fade_in_ms"]) if "fade_in_ms" in p else F
             Fo = ms(p["fade_out_ms"]) if "fade_out_ms" in p else F
             fi = 0 if n0 == 0 else (Fi if n0 > cur and p.get("fade_in", True) else S)
             fo = 0 if n1 >= n_out else (Fo if nxt > n1 else S)
-            _copy(w, p["src"].memmap() if "src" in p else src, n0 - shift, n,
-                  min(fi, n // 2), min(fo, n // 2), gain)
+            bi, bo = k > 0 and butt[k - 1], butt[k]
+            a, b = n0 + (H if bi else 0), n1 - (H if bo else 0)
+            fi, fo = (0 if bi else fi), (0 if bo else fo)
+            arr, shift = _source(p, src, sr)
+            _copy(w, arr, a - shift, b - a, min(fi, (b - a) // 2), min(fo, (b - a) // 2), gain)
+            if bo:
+                arr2, shift2 = _source(pieces[k + 1], src, sr)
+                _xfade(w, arr, b - shift, arr2, b - shift2, 2 * H, gain)
         cur = n1
     if cur < n_out:
         _gap(w, ref, cur, n_out - cur, S, n_out)
     w.close()
+
+
+def _source(p: dict, src: np.ndarray, sr: int) -> tuple[np.ndarray, int]:
+    return (p["src"].memmap() if "src" in p else src), int(round(p["offset"] * sr))
+
+
+def _read(src: np.ndarray, a: int, n: int) -> np.ndarray:
+    """n frames of src from frame a, zeros outside it."""
+    blk = np.zeros((n, src.shape[1]), np.float32)
+    s0, s1 = max(a, 0), min(a + n, len(src))
+    if s1 > s0:
+        blk[s0 - a:s1 - a] = src[s0:s1]
+    return blk
+
+
+def _xfade(w: WavWriter, a_src: np.ndarray, a: int, b_src: np.ndarray, b: int, n: int,
+           gain: float):
+    """n frames: a_src from frame a fading out plus b_src from frame b fading in (the raised
+    cosines sum to 1, so a splice inside continuous sound keeps its level)."""
+    blk = _read(a_src, a, n) * _fade(n, False) + _read(b_src, b, n) * _fade(n, True)
+    if gain != 1.0:
+        blk *= np.float32(gain)
+    w.write(blk)
 
 
 def _gap(w: WavWriter, ref, start: int, n: int, F: int, n_out: int):

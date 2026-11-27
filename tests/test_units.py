@@ -11,6 +11,7 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from losslesssync.app.batch import _lang, episode_key, needs_check, summarize  # noqa: E402
+from losslesssync.audio.render import render  # noqa: E402
 from losslesssync.audio.wavio import WavWriter, read_info  # noqa: E402
 from losslesssync.sync.cuts import best_cut  # noqa: E402
 from losslesssync.sync.features import frame_positions, mel_filterbank, pool  # noqa: E402
@@ -70,6 +71,37 @@ class WavIO(unittest.TestCase):
             f.write(b"not a wav file at all")
         with self.assertRaises(ValueError):
             read_info(self.path)
+
+
+class Render(unittest.TestCase):
+    def test_butt_splice_keeps_continuous_sound(self):
+        # two pieces of one source with the same offset: the splice's cross-fade must give
+        # the source back exactly (no dip to silence)
+        with tempfile.TemporaryDirectory() as d:
+            sr, n = 8000, 8000
+            x = np.random.default_rng(1).standard_normal((n, 2)).astype(np.float32)
+            src, out = os.path.join(d, "src.wav"), os.path.join(d, "out.wav")
+            w = WavWriter(src, n, 2, sr)
+            w.write(x)
+            w.close()
+            pieces = [{"start": 0.0, "end": 0.5, "offset": 0.0},
+                      {"start": 0.5, "end": 1.0, "offset": 0.0}]
+            render(read_info(src), pieces, n, out)
+            m = read_info(out).memmap()
+            np.testing.assert_allclose(m, x, atol=1e-6)
+            del m
+            # an offset jump at the splice: each side reads its own source mapping
+            pieces[1]["offset"] = -0.1           # the second piece reads 800 frames later
+            render(read_info(src), pieces, n, out)
+            m = read_info(out).memmap()
+            s, h = 4000, 16                      # splice frame, splice_ms / 2 at 8 kHz
+            np.testing.assert_allclose(m[:s - h], x[:s - h], atol=1e-6)
+            np.testing.assert_allclose(m[s + h:n - 800], x[s + h + 800:], atol=1e-6)
+            t = (np.arange(2 * h) + 0.5) / (2 * h)
+            up = (0.5 - 0.5 * np.cos(np.pi * t))[:, None]
+            np.testing.assert_allclose(m[s - h:s + h], x[s - h:s + h] * (1 - up)
+                                       + x[s - h + 800:s + h + 800] * up, atol=1e-5)
+            del m
 
 
 class BestCut(unittest.TestCase):
