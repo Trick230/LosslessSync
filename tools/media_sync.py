@@ -1,6 +1,6 @@
 """Sync every episode where the media lives.
 
-    python tools/media_sync.py [--cloud [--dir DIR] [--here] [--only ID,...]] [--dry-run] [-- BATCH_OPTIONS...]
+    python tools/media_sync.py [--cloud [--dir DIR] [--here] [--only ID,...] [--redo]] [--dry-run] [-- BATCH_OPTIONS...]
 
 PC (default): `losslesssync batch` over LLS_MEDIA_DIR (its refs/ and srcs/ folders when it
 has them, else the folder itself, EN/PT in the names) into LLS_OUT_DIR; episodes already
@@ -11,10 +11,9 @@ https://github.com/Trick230/devcloud): --dir DIR (default samples), the same rul
 its refs/ and srcs/ when it has them, else DIR itself, EN/PT in the names. Results go to
 synced/; episodes with their report in synced/<episode>/ are skipped. Each pending episode
 becomes a GitHub Actions job of its own (`lls remote`, all in parallel); --here syncs them
-on this machine instead, one at a
-time: copy its two files to .lls/media-cache, sync, upload the flac/json/html/log to
-synced/<episode>/, delete that episode's cache. --only picks episodes by ID (a hash of the
-episode key: Actions logs are public, so a runner never prints names and batch's own output
+on this machine instead, one at a time: copy its two files to .lls/media-cache, sync,
+upload the flac/json/html/log to synced/<episode>/, delete that episode's cache. --redo
+syncs done episodes again. --only picks episodes by ID (a hash of the episode key: Actions logs are public, so a runner never prints names and batch's own output
 goes only into the uploaded log). dc is found through DEVCLOUD (environment or .env), else
 .devcloud/ (Actions) or ~/devcloud.
 
@@ -36,6 +35,7 @@ from losslesssync import dc_launcher as _dc  # noqa: E402
 from losslesssync.app.batch import MEDIA_EXT, _lang, episode_key  # noqa: E402
 
 QUIET = os.environ.get("GITHUB_ACTIONS") == "true"   # public logs: no media names
+REDO = False                                          # --redo: done episodes too
 
 
 def ep_id(key: str) -> str:
@@ -117,7 +117,7 @@ def pending(base: str, only: set[str] | None) -> list[tuple[str, str, str, str]]
         ref, src = refs[key], srcs[key]
         ep = os.path.splitext(src)[0]
         name = ep_id(key) if QUIET else f"{key} [{ep_id(key)}]"
-        if ep in done and f"{ep}_synced.json" in drive(
+        if not REDO and ep in done and f"{ep}_synced.json" in drive(
                 "ls", "--files", f"synced/{ep}", capture=True).splitlines():
             print(f"{name}: done, skipped")
             continue
@@ -135,7 +135,8 @@ def remote(base: str, extra: list[str], dry: bool) -> int:
     if dry or not ids:
         return 0
     tail = f" -- {shlex.join(extra)}" if extra else ""
-    cmds = [f"./lls py tools/media_sync.py --cloud --dir {shlex.quote(base)} --here --only {i}{tail}"
+    redo = " --redo" if REDO else ""
+    cmds = [f"./lls py tools/media_sync.py --cloud --dir {shlex.quote(base)} --here --only {i}{redo}{tail}"
             for i in ids]
     return subprocess.call([sys.executable, os.path.join(ROOT, "tools", "lls.py"), "remote", "--", *cmds],
                            cwd=ROOT, stdin=subprocess.DEVNULL)
@@ -169,6 +170,8 @@ def main(argv: list[str]) -> int:
     sys.stdout.reconfigure(line_buffering=True)  # type: ignore[union-attr]  # our lines between batch's
     is_cloud = "--cloud" in own or os.environ.get("LLS_ENV") == "cloud"
     dry = "--dry-run" in own
+    global REDO
+    REDO = "--redo" in own
     if not is_cloud:
         return pc(extra, dry)
     only = set(own[own.index("--only") + 1].split(",")) if "--only" in own else None
