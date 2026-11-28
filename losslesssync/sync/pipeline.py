@@ -191,6 +191,7 @@ def sync(ref_path: str, src_path: str, out_path: str | None, opt: Options,
     out_dir = os.path.dirname(os.path.abspath(out_path or opt.report or src_path))
     tmp = tempfile.mkdtemp(prefix="losslesssync_", dir=opt.tmp_dir or out_dir)
     ref_sep = None
+    bg: list = []      # background jobs writing into tmp (the early stretch)
     try:
         if split:
             log("vocals separation already started in the background")
@@ -199,8 +200,9 @@ def sync(ref_path: str, src_path: str, out_path: str | None, opt: Options,
         if split and opt.verify_deep:
             ref_sep = stems.RefSeparation(ref_path, ref_st, tmp, opt, split[0])
         return _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st,
-                     src_st, tmp, split, ref_sep)
+                     src_st, tmp, split, ref_sep, bg)
     finally:
+        futures_wait(bg)                  # an error mid-analysis: let it finish before rmtree
         if ref_sep:
             ref_sep.close()
         if split:
@@ -212,7 +214,7 @@ def sync(ref_path: str, src_path: str, out_path: str | None, opt: Options,
 
 
 def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src_st, tmp,
-          split=None, ref_sep=None):
+          split=None, ref_sep=None, bg=None):
     log("decoding analysis audio (mono 16 kHz)...")
     prog("decode", 0.0)
     with ThreadPoolExecutor(1) as dec:     # two ffmpeg processes at once (exit waits)
@@ -284,6 +286,17 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
             k *= 1 + slope
             continue
         break
+    early = None
+    if (out_path and not opt.analyze_only and opt.pitch == "keep" and abs(k - 1) > 1e-4
+            and opt.keep_engine in ("auto", "signalsmith") and signalsmith.available()
+            and bg is not None):
+        # k is final here and the stretch needs nothing else: lls-dsp runs beside the cut
+        # points instead of after them
+        log("time-stretching source keeping its pitch (Signalsmith Stretch, in the background)...")
+        pool = ThreadPoolExecutor(1)
+        early = pool.submit(signalsmith_keep, src_path, src_st, k, tmp, opt)
+        pool.shutdown(wait=False)
+        bg.append(early)
     segs = segments.split_on_jumps(segs, k, opt.chunk_s)
     dropped = [s for s in segs if s.method == "coarse" and len(s.anchors) < 4]
     # an unconfirmed segment whose offset is close to a confirmed neighbour's is that
@@ -389,7 +402,7 @@ def _sync(ref_path, src_path, out_path, opt, log, prog, ref_streams, ref_st, src
             rest16 = None
             if opt.pitch == "keep" and abs(k - 1) > 1e-4:
                 inter_wav, rest16 = keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log,
-                                               report, opt, split)
+                                               report, opt, split, early)
             info = read_info(inter_wav)
         except BaseException:
             if ref_loud:                  # do not leave its ffmpeg running behind the error
@@ -611,17 +624,32 @@ def fill_regions(pieces: list[dict], n_out: int, sr: int, fade_ms: float,
     return merged
 
 
-def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, split=None):
+def signalsmith_keep(src_path, src_st, k, tmp, opt):
+    """The whole source stretched by k with Signalsmith into tmp/keep.wav: (engine, keep16)."""
+    keep_wav = os.path.join(tmp, "keep.wav")
+    raw_wav = os.path.join(tmp, "raw.wav")
+    media.decode_to_wav(src_path, src_st, raw_wav, src_st.channels, src_st.sample_rate)
+    engine = signalsmith.stretch(raw_wav, keep_wav, k)
+    if not opt.keep_temp:
+        os.remove(raw_wav)
+    return engine, media.decode_mono(keep_wav, media.audio_streams(keep_wav)[0], ANA_SR)
+
+
+def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, split=None,
+               early=None):
     """Stretch the source to the film timing keeping its pitch (opt.keep_engine) and
     shift the pieces by the stretcher's latency, measured against the resampled source.
     Returns the stretched WAV and, with stems, the analysis copy of everything but the
-    vocals in its timing (for verify), else None."""
+    vocals in its timing (for verify), else None. early: signalsmith_keep already running
+    (started once k was final)."""
     rest16 = None
     keep_wav = os.path.join(tmp, "keep.wav")
     kind = opt.keep_engine
     if kind == "auto":
         kind = "signalsmith" if signalsmith.available() else "wsola"
-    if kind == "stems":
+    if early is not None:
+        engine, keep16 = early.result()
+    elif kind == "stems":
         log("time-stretching source keeping its pitch (separated stems)...")
         split = split or stems.start_split(src_path, src_st, tmp, opt, log)
         n_out = int(round(wavio.read_info(split[1]).frames * k))
@@ -663,12 +691,7 @@ def keep_pitch(src_path, src_st, k, inter16, pieces, tmp, log, report, opt, spli
         del v16
     elif kind == "signalsmith":
         log("time-stretching source keeping its pitch (Signalsmith Stretch)...")
-        raw_wav = os.path.join(tmp, "raw.wav")
-        media.decode_to_wav(src_path, src_st, raw_wav, src_st.channels, src_st.sample_rate)
-        engine = signalsmith.stretch(raw_wav, keep_wav, k)
-        if not opt.keep_temp:
-            os.remove(raw_wav)
-        keep16 = media.decode_mono(keep_wav, media.audio_streams(keep_wav)[0], ANA_SR)
+        engine, keep16 = signalsmith_keep(src_path, src_st, k, tmp, opt)
     elif kind == "wsola":
         log(f"time-stretching source keeping its pitch (WSOLA, +-{opt.wsola_tol_ms:g} ms, "
             f"up to +-{opt.wsola_max_ms:g} ms)...")
