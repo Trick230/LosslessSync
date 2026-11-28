@@ -77,19 +77,29 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         working-directory: dsp
         run: |
-          if ($IsWindows) {   # static CRT: no Visual C++ redistributable needed
+          # Windows x64: GCC (WinLibs, as lls setup --dev): its Signalsmith code runs ~30 % faster
+          # than MSVC's. Windows ARM: MSVC, static CRT (no Visual C++ redistributable needed)
+          $gnu = "${{ matrix.os }}" -eq "windows-latest"
+          if ($gnu) {
+            ../lls.cmd setup-rust
+            if ($LASTEXITCODE) { exit 1 }
+          } elseif ($IsWindows) {
             $env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
             $env:RUSTFLAGS = "-C target-feature=+crt-static"
           }
-          cargo build -q --release --features signalsmith
+          function Build-Dsp($dir) {
+            if ($gnu) { ../lls.cmd cargo build -q --release --features signalsmith --target-dir $dir }
+            else { cargo build -q --release --features signalsmith --target-dir $dir }
+          }
+          Build-Dsp target
           if ($LASTEXITCODE) { exit 1 }
           $exe = if ($IsWindows) { "lls-dsp.exe" } else { "lls-dsp" }
           New-Item -ItemType Directory -Force ../dist | Out-Null
           Copy-Item "target/release/$exe" "../dist/${{ steps.id.outputs.asset }}"
           if ("${{ matrix.v3 }}" -eq "true") {   # x64: also an x86-64-v3 build (AVX2/FMA), picked by setup
             $env:RUSTFLAGS = "$env:RUSTFLAGS -C target-cpu=x86-64-v3".Trim()
-            $env:CXXFLAGS = if ($IsWindows) { "/arch:AVX2" } else { "-march=x86-64-v3" }
-            cargo build -q --release --features signalsmith --target-dir target-v3
+            $env:CXXFLAGS = if ($IsWindows -and -not $gnu) { "/arch:AVX2" } else { "-march=x86-64-v3" }
+            Build-Dsp target-v3
             if ($LASTEXITCODE) { exit 1 }
             $v3 = "${{ steps.id.outputs.asset }}" -replace '^(lls-dsp-[^.]+)', '$1-v3'
             Copy-Item "target-v3/release/$exe" "../dist/$v3"

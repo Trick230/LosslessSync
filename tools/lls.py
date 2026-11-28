@@ -625,6 +625,9 @@ def main(argv: list[str]) -> int:
         if cmd == "dsp-hash":
             print(dsp_hash())
             return 0
+        if cmd == "setup-rust":              # CI: the Windows x64 toolchain of setup --dev
+            setup_rust()
+            return 0
         if cmd == "dsp-asset":
             print(dsp_asset())
             return 0

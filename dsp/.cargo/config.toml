@@ -1,3 +1,4 @@
+# CI builds Windows x64 with GCC (WinLibs), as lls setup --dev does
 # signalsmith-stretch (feature "signalsmith") is C++: build.rs links its runtime statically,
 # so cc must not add the libstdc++ DLL
 [env]
