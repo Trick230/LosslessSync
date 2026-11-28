@@ -60,6 +60,11 @@ cut scene, found and synced automatically.</sub>
 CI runs 13 synthetic cases with known ground truth on every push, plus a real-episode
 regression check.
 
+| Speed, one real TV episode on a desktop PC | Wall time |
+| --- | --- |
+| Resampled (`--pitch resample`) | 33-36 s |
+| Original pitch kept (`--pitch keep`, Signalsmith) | 40 s |
+
 ## Installation
 
 ```sh

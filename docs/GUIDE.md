@@ -38,7 +38,8 @@ with `librubberband` for Apple Silicon).
 - Optional, `lls setup --dev`: Rust in `.lls/` to rebuild `lls-dsp` (`lls cargo build
   --release --features signalsmith`). The `signalsmith` feature compiles C++, so it needs a
   C++ compiler and libclang: on Windows x64 `--dev` downloads a WinLibs GCC with LLVM into
-  `.lls/` too (`LLS_MINGW` points to another one); on Linux, the system's GCC and
+  `.lls/` too (`LLS_MINGW` points to another one; CI builds the Windows x64 `lls-dsp` with
+  the same GCC, whose Signalsmith code runs ~40% faster than MSVC's); on Linux, the system's GCC and
   libclang. `LOSSLESSSYNC_DSP=off` forces the Python code (the WSOLA stretch is
   bit-identical, about 6x slower).
 
@@ -115,7 +116,9 @@ one finishes on the CPU.
    at relative speeds from x0.75 to x1.34 against the source the neighbours leave unused;
    a match gets its own speed (refined with GCC-PHAT) and its own sped-up copy of the source.
 8. **Render.** Pieces are copied from the speed-corrected source at their offsets, with fades
-   at gaps. The result is then measured against the reference and encoded.
+   at gaps. The result is then measured against the reference and encoded. With
+   `--pitch keep` and Signalsmith, the time-stretch starts in the background as soon as the
+   speed is final, so it runs while the cut points are placed.
 
 ## Output and report
 
